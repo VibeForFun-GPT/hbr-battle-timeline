@@ -13,7 +13,8 @@
     <button id="pick-video" class="file-picker"><span class="file-icon">▷</span><strong>选择本地视频</strong><small>MP4 · MKV · MOV · AVI · WebM</small></button>
     <label>视频路径<input id="video-path" type="text" placeholder="也可以粘贴视频的完整路径" spellcheck="false"></label>
     <div class="two-inputs"><label>战斗开始<input id="start-time" value="00:00" placeholder="01:13"></label><label>结束时间<input id="end-time" placeholder="留空：直到结尾"></label></div>
-    <div class="small-note">填入战斗开始时间。自动匹配队伍头像与角色图库，不确定的名字可稍后核对。</div>
+    <div class="small-note">可在「预览与画面校准」中拖动进度条，直接选择战斗开始画面。</div>
+    <button id="auto-find-start" class="secondary full-width">自动寻找战斗起点</button><p id="start-search-status" class="small-note" role="status"></p>
     <button id="calibrate-button" class="secondary full-width">预览与画面校准</button>
     </div>
   </section>
@@ -50,7 +51,19 @@
   </div>
 </section>
 </main>
-<dialog id="calibration-dialog"><div class="dialog-heading"><h2>画面校准</h2><button class="text-button" data-close="calibration-dialog">✕</button></div><p id="preview-instructions">有边框时，拖动框选完整游戏画面。请包含左侧 TURN、右上角 OD 和底部 6 人头像。</p><div class="two-inputs"><label id="preview-time-label">预览时间<input id="preview-time" value="01:13"></label><button id="load-preview" class="secondary">载入 Frame</button></div><canvas id="crop-canvas" width="960" height="540"></canvas><p id="crop-caption">默认使用完整画面</p><div class="dialog-footer"><button id="reset-crop" class="secondary">恢复完整画面</button><button id="apply-crop" class="primary">应用校准</button></div></dialog>
+<dialog id="calibration-dialog">
+  <div class="dialog-heading"><h2 id="calibration-title">选择开始画面与校准</h2><button class="text-button" data-close="calibration-dialog" aria-label="关闭画面校准">✕</button></div>
+  <p id="preview-instructions">拖动进度条选择起点；需要时在下方框选完整游戏画面。</p>
+  <div id="preview-video-controls" class="preview-timeline">
+    <div class="preview-time-heading"><label for="preview-time">拖动选择画面</label><output id="preview-time-display" for="preview-time">00:00.000 / --:--</output></div>
+    <input id="preview-time" type="range" min="0" max="0" step="0.001" value="0" disabled aria-label="预览进度" aria-describedby="preview-status">
+    <div class="preview-step-controls"><button id="preview-back-second" class="secondary" disabled>− 1 秒</button><button id="preview-prev-frame" class="secondary" disabled>← 上一帧</button><button id="preview-next-frame" class="secondary" disabled>下一帧 →</button><button id="preview-forward-second" class="secondary" disabled>＋ 1 秒</button><span>可用方向键逐帧微调</span></div>
+    <button id="preview-auto-start" class="secondary full-width">自动寻找可用起点</button>
+  </div>
+  <div class="preview-refresh"><p id="preview-status" role="status" aria-live="polite">准备预览…</p><button id="load-preview" class="secondary">重新载入预览</button></div>
+  <canvas id="crop-canvas" width="960" height="540"></canvas><p id="crop-caption">默认使用完整画面</p>
+  <div class="dialog-footer"><button id="reset-crop" class="secondary">恢复完整画面</button><button id="apply-crop" class="primary" disabled>从此画面开始并应用校准</button></div>
+</dialog>
 <dialog id="export-dialog"><div class="dialog-heading"><h2>导出行动轴</h2><button class="text-button" data-close="export-dialog">✕</button></div><p>所有文件保存在当前分析目录。Excel 包含简写、完整名称与识别依据；ZIP 包含核对 Screenshot。</p><div id="download-links" class="download-links"></div><p id="export-note"></p></dialog>
 <dialog id="help-dialog"><div class="dialog-heading"><h2>使用说明</h2><button class="text-button" data-close="help-dialog">✕</button></div><ol><li>实时模式：选择游戏窗口，点击开始后切回游戏。在第一回合选招前开始；结束时按 Ctrl + Alt + E 或返回此页点「结束并生成行动轴」。</li><li>游戏离开前台或最小化时暂停取新画面；保持游戏完整可见。结束后自动识别并生成图表，捕获素材可回看，不含 Audio。</li><li>录像模式：点击「导入录像」，选择视频并填写战斗开始时间。有边框时使用「画面校准」。</li><li>默认自动匹配角色头像与 HBR Quest 图库。首次下载需要联网，缓存后可离线识别。名字不确定时保留 Placeholder；在「队伍与 Skill 简写」查看候选或自行填写，也可给已有行动轴自动补全名字。手动名字优先保留。</li><li>任意 Skill 都保留 OCR 文本。点击黄色行修正完整名称和简写；同一角色相同 Skill 可同步修改。保存后导出 PNG、Excel、CSV、HTML、JSON 或 ZIP。</li></ol><p>前置 OD 在该 Normal Turn 确认前发动；后置 OD 在确认后发动。Skill 产生的额外行动标为「追加」。</p><p>剪辑跳过选招、头像遮挡或切换窗口期间的遗漏需要核对。日文 UI 需要替换 OCR Model；默认 Model 用于中文与 English。</p></dialog>
 <div id="toast" role="status" hidden></div><input id="profile-file" type="file" accept=".json" hidden><script src="app.js"></script>

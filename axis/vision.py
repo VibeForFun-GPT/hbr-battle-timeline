@@ -67,6 +67,26 @@ def parse_counter(text, keyword):
     return None
 
 
+def parse_turn(text):
+    """Read a labeled TURN integer or fraction, without scene-number guesses."""
+    if not isinstance(text, str):
+        return None
+    clean = re.sub(r"[\s|]", "", text.upper()).replace("O", "0")
+    match = re.fullmatch(r"TURN(\d{1,3})", clean)
+    if match:
+        value = int(match[1])
+        return value if 1 <= value <= 999 else None
+    # Keep explicit Counter separators; a missing slash is ambiguous with TURN111.
+    if re.fullmatch(r"TURN\d{1,3}[/\\.]\d{1,3}", clean):
+        counter = parse_counter(clean, "TURN")
+        return counter[0] if counter else None
+    # Retain the previous unique OCR repair for a slash read as 1.
+    if re.fullmatch(r"TURN\d{4,7}", clean):
+        counter = parse_counter(clean, "TURN")
+        return counter[0] if counter else None
+    return None
+
+
 class Video:
     def __init__(self, path, layout=None):
         self.path = Path(path).resolve()
@@ -131,11 +151,11 @@ class Reader:
     def status(self, frame):
         result = self.lines([crop(frame, self.layout[k]) for k in ["turn_box","bonus_box","od_box"]])
         turn, bonus, od = result
-        counter = parse_counter(turn[0], "TURN") if turn[1] >= .6 else None
+        turn_value = parse_turn(turn[0]) if turn[1] >= .6 else None
         extra = parse_counter(bonus[0], "BONUS") if bonus[1] >= .62 else None
         match = re.fullmatch(r"\D*(\d{1,3}(?:\.\d+)?)\s*[%％]\D*", od[0])
         value = float(match[1]) if match and od[1] >= .65 else None
-        return {"turn":counter[0] if counter else None,"bonus":extra,"od":value,
+        return {"turn":turn_value,"bonus":extra,"od":value,
                 "raw":{"turn":turn[0],"bonus":bonus[0],"od":od[0]},
                 "confidence":{"turn":float(turn[1]),"bonus":float(bonus[1]),"od":float(od[1])}}
 

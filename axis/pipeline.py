@@ -12,6 +12,7 @@ import cv2
 
 from .avatar_names import AvatarNameMatcher
 from .model import SCHEMA_VERSION, annotate_rows, build_team, stamp
+from .start_detection import bootstrap_evidence
 from .vision import Avatars, Reader, Video, save_image
 
 
@@ -89,18 +90,11 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
         report(.02,"定位首次战斗选招画面")
         boot,boot_time=None,None
         for stamp_time,frame in video.sample(start,finish,rate=2):
-            small=cv2.resize(frame,(960,540))
-            hsv=cv2.cvtColor(small,cv2.COLOR_BGR2HSV)
-            colors=((hsv[:,:,0]>=138)&(hsv[:,:,0]<=178)&(hsv[:,:,1]>65)&(hsv[:,:,2]>105))
-            # Bootstrap 仅用 Color Gate；再用 TURN OCR 排除配置展示。
-            boxes=video.layout["portrait_boxes"]
-            found=sum(colors[b[1]//2:b[3]//2,b[0]//2:b[2]//2].mean()>.10 for b in boxes)
-            if found>=5 and reader.status(frame)["turn"] is not None:
+            evidence=bootstrap_evidence(frame,video.layout,reader)
+            if evidence["accepted"]:
                 boot,boot_time=frame,stamp_time
                 break
-            if stamp_time-start>180:
-                break
-            report(.02+min(.07,(stamp_time-start)/max(finish-start,1)*.1),"寻找可见的 6 人头像与 TURN Counter")
+            report(.02+min(.07,(stamp_time-start)/max(finish-start,1)*.1),f"自动寻找可用选招画面：{stamp(stamp_time)}")
         if boot is None:
             raise ValueError("未找到战斗选招画面。请设置接近战斗开始的时间；有边框或直播布局时，在「画面校准」中框选完整游戏画面。")
         save_image(output/"bootstrap.jpg",boot)

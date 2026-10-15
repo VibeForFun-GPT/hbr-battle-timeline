@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Video 校准支持 Timeline Slider、逐 Frame 微调与直接设定战斗起点。
+- 自动寻找可用初始 Frame，支持后台进度、取消与继续搜索。
+- 兼容 `TURN 1` 与 `TURN 1/30` 格式，修复前者无法开始分析的问题。
+- 预览使用实际显示 Frame 的时间，并安全处理首尾位置和过期请求。
+
 ## 0.1.0
 
 - 实时 Window Capture 与本地 Video 导入。

@@ -7,6 +7,9 @@ let runningJob = null, importedProfile = null, cropRect = [0,0,1,1], cropImage =
 let toastTimer = null, polling = false;
 let sourceMode='live',captureActive=false,previewSource='video';
 let catalogState=null,catalogTimer=null,catalogPolling=false,namesBusy=false;
+let previewSession=0,previewSequence=0,previewPending=null,previewBusy=false,previewTimer=null;
+let previewVideo=null,previewSelected=0,previewDisplayed=null,previewMetadata=null;
+let startSearch=null,startResume=null,startOpening=false;
 
 async function api(path,body,allowStatusError=false){
   const response = await fetch(path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
@@ -143,6 +146,7 @@ async function loadJob(id){
     $('document-title').value=doc.title;
     $('document-subtitle').textContent=doc.video.width+' × '+doc.video.height+' · '+clock(doc.video.duration)+' · '+doc.rows.length+' 次行动确认';
     $('capture-summary').hidden=!doc.capture;$('capture-summary').textContent=doc.capture?'实时捕获 · '+clock(doc.capture.duration)+(doc.capture.paused_seconds>.1?'；曾暂停取新画面 '+doc.capture.paused_seconds+' 秒，请核对期间是否有行动遗漏。':'；画面已保存，可逐行回看。'):'';
+    if($('calibration-dialog').open)$('calibration-dialog').close();
     $('video-path').value=doc.video.path;$('start-time').value=clock(doc.settings.start);$('end-time').value=doc.settings.end<doc.video.duration-.1?clock(doc.settings.end):'';
     cropRect=doc.settings.layout?.crop||[0,0,1,1];
     $('source-video').src=encodeURI('video/'+id);
@@ -255,13 +259,169 @@ function drawCrop(){
   ctx.strokeStyle='#85d8be';ctx.lineWidth=3;ctx.strokeRect(x1*w,y1*h,(x2-x1)*w,(y2-y1)*h);
   $('crop-caption').textContent='游戏画面范围：'+cropRect.map(x=>Math.round(x*100)+'%').join(' / ');
 }
-async function preview(){const path=$('video-path').value.trim(),hwnd=Number($('capture-window').value);if(previewSource==='video'&&!path)throw Error('请先选择视频。');if(previewSource==='live'&&!hwnd&&!captureActive)throw Error('请先选择游戏窗口。');$('load-preview').disabled=true;try{if(previewSource==='live'&&!captureActive)$('preview-instructions').textContent='请在 3 秒内切回游戏窗口。预览完成后回到本页框选完整游戏画面。';const data=previewSource==='live'?await api('api/live/preview',{hwnd}):await api('api/preview',{path,time:$('preview-time').value});cropImage=new Image();await new Promise((resolve,reject)=>{cropImage.onload=resolve;cropImage.onerror=reject;cropImage.src=data.image;});drawCrop();$('preview-instructions').textContent='拖动框选完整游戏画面，包含 TURN、OD 和底部 6 人头像。';}finally{$('load-preview').disabled=false;}}
+function previewPath(){return $('video-path').value.trim().replace(/^"|"$/g,'');}
+function previewClock(seconds){
+  const milliseconds=Math.round(Math.max(0,seconds)*1000),whole=Math.floor(milliseconds/1000);
+  return String(Math.floor(whole/60)).padStart(2,'0')+':'+String(whole%60).padStart(2,'0')+'.'+String(milliseconds%1000).padStart(3,'0');
+}
+function timestampSeconds(value){
+  if(!String(value).trim())return 0;
+  const parts=String(value).trim().replaceAll('：',':').split(':');
+  if(parts.length>3||parts.some(part=>!/^\d+(?:\.\d+)?$/.test(part.trim())))throw Error('时间请使用 MM:SS、HH:MM:SS 或秒数。');
+  const time=parts.reduce((total,part)=>total*60+Number(part),0);
+  if(!Number.isFinite(time))throw Error('请输入有效的视频时间。');
+  return time;
+}
+function resetPreview(){
+  cancelStartSearch();
+  previewSession++;previewSequence++;clearTimeout(previewTimer);previewPending=null;
+  previewVideo=null;previewDisplayed=null;previewMetadata=null;cropImage=null;cropAnchor=null;
+}
+function currentPreview(job){
+  return $('calibration-dialog').open&&job.session===previewSession&&job.sequence===previewSequence&&job.mode===previewSource&&(job.mode==='live'||job.path===previewPath());
+}
+function clampPreview(time){
+  if(!previewVideo)return 0;
+  return Math.max(0,Math.min(previewVideo.max_time,Math.round(time*previewVideo.fps)/previewVideo.fps));
+}
+function renderPreviewControls(){
+  $('apply-crop').disabled=previewDisplayed===null||!cropImage;
+  if(previewSource!=='video')return;
+  const available=!!previewVideo;
+  $('preview-time').disabled=!available;
+  if(available){
+    $('preview-time').max=String(previewVideo.max_time);$('preview-time').step=String(1/previewVideo.fps);$('preview-time').value=String(previewSelected);
+    $('preview-time').setAttribute('aria-valuetext',previewClock(previewSelected)+'，总时长 '+previewClock(previewVideo.duration));
+  }
+  $('preview-time-display').textContent=previewClock(previewSelected)+' / '+(available?previewClock(previewVideo.duration):'--:--');
+  $('preview-prev-frame').disabled=!available||previewSelected<=0;
+  $('preview-next-frame').disabled=!available||previewSelected>=previewVideo.max_time;
+  $('preview-back-second').disabled=!available||previewSelected<=0;
+  $('preview-forward-second').disabled=!available||previewSelected>=previewVideo.max_time;
+}
+function queuePreview(delay=0){
+  const job={session:previewSession,sequence:++previewSequence,mode:previewSource,path:previewPath(),time:previewSelected,hwnd:Number($('capture-window').value)};
+  previewDisplayed=null;previewPending=job;clearTimeout(previewTimer);
+  $('preview-status').textContent=job.mode==='video'?'正在加载 '+previewClock(job.time)+' 的画面…':'正在截取游戏画面…';
+  $('load-preview').disabled=job.mode==='live';renderPreviewControls();
+  if(delay)previewTimer=setTimeout(drainPreview,delay);else void drainPreview();
+}
+async function drainPreview(){
+  if(previewBusy||!previewPending)return;
+  const job=previewPending;previewPending=null;previewBusy=true;
+  try{
+    if(job.mode==='live'&&!captureActive&&currentPreview(job))$('preview-instructions').textContent='请在 3 秒内切回游戏窗口。预览完成后回到本页框选完整游戏画面。';
+    const data=job.mode==='live'?await api('api/live/preview',{hwnd:job.hwnd}):await api('api/preview',{path:job.path,time:job.time});
+    if(!currentPreview(job))return;
+    const image=new Image();
+    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error('预览画面加载失败，请重试。'));image.src=data.image;});
+    if(!currentPreview(job))return;
+    cropImage=image;previewDisplayed=job.mode==='video'?Number(data.time):0;
+    if(job.mode==='video')previewSelected=previewDisplayed;
+    drawCrop();renderPreviewControls();
+    $('preview-instructions').textContent='拖动框选完整游戏画面，包含 TURN、OD 和底部 6 人头像。';
+    $('preview-status').textContent=job.mode==='video'?'已显示 '+previewClock(previewDisplayed)+'；点击下方按钮，将此画面设为战斗开始并保存校准。':'游戏画面已载入，可拖动框选游戏区域。';
+  }catch(error){if(currentPreview(job)){$('preview-status').textContent='预览失败：'+error.message;toast(error.message,true);}}
+  finally{
+    previewBusy=false;
+    if(currentPreview(job))$('load-preview').disabled=false;
+    if(previewPending){clearTimeout(previewTimer);previewTimer=setTimeout(drainPreview,80);}
+  }
+}
+async function preview(){
+  const session=previewSession;
+  if(previewSource==='video'){
+    const path=previewPath();if(!path)throw Error('请先选择视频。');
+    if(!previewVideo||previewVideo.path!==path){
+      $('preview-status').textContent='正在读取视频时长…';
+      if(!previewMetadata||previewMetadata.session!==session||previewMetadata.path!==path)previewMetadata={session,path,promise:api('api/video-info',{path})};
+      const request=previewMetadata;
+      try{
+        const info=await request.promise;
+        if(session!==previewSession||!$('calibration-dialog').open||path!==previewPath())return;
+        if(!(info.duration>0&&info.fps>0&&info.max_time>=0))throw Error('无法读取视频时长，请重新选择视频。');
+        if(!previewVideo||previewVideo.path!==path){previewVideo={path,duration:info.duration,fps:info.fps,max_time:info.max_time};previewSelected=clampPreview(timestampSeconds($('start-time').value));renderPreviewControls();}
+      }catch(error){if(session===previewSession){$('preview-status').textContent='视频信息读取失败，可点击重新载入预览重试。';throw error;}return;}
+      finally{if(previewMetadata===request)previewMetadata=null;}
+    }
+  }else if(!Number($('capture-window').value)&&!captureActive)throw Error('请先选择游戏窗口。');
+  if(session===previewSession)queuePreview();
+}
+function seekPreview(time,delay=0){if(previewVideo){if(startSearch)cancelStartSearch();previewSelected=clampPreview(time);queuePreview(delay);}}
+function renderStartSearch(){
+  const continuation=startResume&&startResume.path===previewPath()&&JSON.stringify(startResume.crop)===JSON.stringify(cropRect);
+  $('auto-find-start').textContent=startSearch?'取消寻找起点':continuation?'继续寻找后续画面':'自动寻找战斗起点';
+  $('preview-auto-start').textContent=startSearch?'取消寻找起点':continuation?'继续寻找后续画面':'自动寻找可用起点';
+}
+function cancelStartSearch(){
+  const search=startSearch;startSearch=null;
+  if(search){clearTimeout(search.timer);if(search.id)void api('api/find-start/'+search.id+'/cancel',{}).catch(()=>{});}
+  renderStartSearch();
+}
+function currentStartSearch(search){
+  return startSearch===search&&search.session===previewSession&&$('calibration-dialog').open&&previewSource==='video'&&search.path===previewPath()&&JSON.stringify(search.crop)===JSON.stringify(cropRect);
+}
+async function pollStartSearch(search){
+  try{
+    const state=await api('api/find-start/'+search.id);
+    if(!currentStartSearch(search))return;
+    $('start-search-status').textContent=state.message;$('preview-status').textContent=state.message;
+    if(state.status==='running'){search.timer=setTimeout(()=>pollStartSearch(search),800);return;}
+    startSearch=null;
+    const result=state.result;
+    if(state.status==='done'&&result?.found){
+      startResume=null;renderStartSearch();
+      const end=$('end-time').value.trim();let validEnd=false;
+      try{validEnd=!end||timestampSeconds(end)>result.time;}catch{}
+      if(validEnd)$('start-time').value=previewClock(result.time);
+      $('start-search-status').textContent=validEnd?'已自动设为 '+previewClock(result.time)+'；可在预览中继续微调。':'找到 '+previewClock(result.time)+'，请先将结束时间调整到起点之后。';
+      seekPreview(result.time);
+      toast(validEnd?'已找到可用起点 '+previewClock(result.time)+'，请核对预览。':$('start-search-status').textContent,!validEnd);
+    }else{
+      startResume=Number.isFinite(result?.resume_from)?{path:search.path,crop:search.crop,time:result.resume_from}:null;
+      renderStartSearch();$('preview-status').textContent=result?.message||state.message||'未找到可用起点，请调整游戏画面范围后重试。';
+      toast($('preview-status').textContent,state.status==='error');
+    }
+  }catch(error){if(currentStartSearch(search)){startSearch=null;renderStartSearch();$('preview-status').textContent='自动寻找失败：'+error.message;toast(error.message,true);}}
+}
+async function beginStartSearch(){
+  if(startSearch){cancelStartSearch();$('preview-status').textContent='已取消自动寻找，可拖动进度条手动选择。';return;}
+  if(startOpening)return;
+  startOpening=true;
+  try{
+    const opening=!$('calibration-dialog').open||previewSource!=='video'?openCalibration('video'):!previewVideo?preview():Promise.resolve();
+    const session=previewSession,path=previewPath();
+    await opening;
+    if(session!==previewSession||!$('calibration-dialog').open||previewSource!=='video'||path!==previewPath()||startSearch)return;
+  }finally{startOpening=false;}
+  const continuation=startResume&&startResume.path===previewPath()&&JSON.stringify(startResume.crop)===JSON.stringify(cropRect);
+  const search={session:previewSession,path:previewPath(),crop:[...cropRect],id:null,timer:null};
+  startSearch=search;previewSequence++;previewPending=null;clearTimeout(previewTimer);previewDisplayed=null;
+  renderPreviewControls();renderStartSearch();
+  $('start-search-status').textContent='正在自动寻找可用选招画面…';$('preview-status').textContent='正在自动寻找可用选招画面，可随时取消或拖动进度条。';
+  try{
+    const state=await api('api/find-start',{path:search.path,search_from:continuation?startResume.time:0,profile:{layout:{crop:search.crop}}});
+    search.id=state.id;
+    if(!currentStartSearch(search)){void api('api/find-start/'+search.id+'/cancel',{}).catch(()=>{});return;}
+    await pollStartSearch(search);
+  }catch(error){if(currentStartSearch(search)){startSearch=null;renderStartSearch();$('preview-status').textContent='自动寻找失败：'+error.message;throw error;}}
+}
 
 function setSource(mode){sourceMode=mode;$('live-source').hidden=mode!=='live';$('recording-source').hidden=mode!=='video';$('live-hotkey').hidden=mode!=='live';$('source-live').classList.toggle('active',mode==='live');$('source-recording').classList.toggle('active',mode==='video');$('source-live').setAttribute('aria-pressed',String(mode==='live'));$('source-recording').setAttribute('aria-pressed',String(mode==='video'));$('analyze-button').innerHTML=(mode==='live'?'开始捕获':'生成行动轴')+' <span>→</span>';}
 async function refreshWindows(){const previous=$('capture-window').value;const data=await api('api/live/windows');$('capture-window').innerHTML='<option value="">请选择游戏窗口</option>'+data.windows.map(w=>`<option value="${w.hwnd}">${escapeHtml(w.title)} · ${w.width}×${w.height}${w.minimized?'（已最小化）':''}</option>`).join('');if(data.windows.some(w=>String(w.hwnd)===previous))$('capture-window').value=previous;}
-async function openCalibration(mode){previewSource=mode;$('preview-time-label').hidden=mode==='live';$('preview-time').value=$('start-time').value||'00:00';$('preview-instructions').textContent=mode==='live'?'预览时请在 3 秒内切回游戏；取到画面后返回这里校准。':'拖动框选完整游戏画面，包含 TURN、OD 和底部 6 人头像。';$('calibration-dialog').showModal();await preview();}
+async function openCalibration(mode){
+  if(mode==='video'&&!previewPath())throw Error('请先选择视频。');
+  resetPreview();previewSource=mode;previewSelected=0;
+  $('preview-video-controls').hidden=mode==='live';$('load-preview').disabled=false;
+  $('calibration-title').textContent=mode==='live'?'画面校准':'选择开始画面与校准';
+  $('load-preview').textContent=mode==='live'?'重新截取画面':'重新载入预览';
+  $('apply-crop').textContent=mode==='live'?'应用校准':'从此画面开始并应用校准';
+  $('preview-instructions').textContent=mode==='live'?'预览时请在 3 秒内切回游戏；取到画面后返回这里校准。':'拖动进度条选择起点；需要时在下方框选完整游戏画面。';
+  $('preview-status').textContent='准备预览…';drawCrop();renderPreviewControls();
+  $('calibration-dialog').showModal();await preview();
+}
 
-$('pick-video').addEventListener('click',safe(async()=>{const data=await api('api/pick-video',{});if(data.path){setSource('video');$('video-path').value=data.path;$('profile-mode').value='auto';cropRect=[0,0,1,1];cropImage=null;toast('视频已选择，将自动匹配这支队伍的角色名字。');}}));
+$('pick-video').addEventListener('click',safe(async()=>{const data=await api('api/pick-video',{});if(data.path){setSource('video');$('video-path').value=data.path;$('profile-mode').value='auto';cropRect=[0,0,1,1];cropImage=null;startResume=null;toast('视频已选择，正在自动寻找战斗起点。');await beginStartSearch();}}));
 $('source-live').addEventListener('click',()=>setSource('live'));
 $('source-recording').addEventListener('click',()=>setSource('video'));
 $('refresh-windows').addEventListener('click',safe(refreshWindows));
@@ -357,9 +517,38 @@ $('export-button').addEventListener('click',safe(async()=>{
 }));
 $('calibrate-button').addEventListener('click',safe(()=>openCalibration('video')));
 $('load-preview').addEventListener('click',safe(preview));
-$('reset-crop').addEventListener('click',()=>{cropRect=[0,0,1,1];drawCrop();});
-$('apply-crop').addEventListener('click',safe(async()=>{if(cropRect[2]-cropRect[0]<.15||cropRect[3]-cropRect[1]<.15){toast('请框选完整游戏画面。',true);return;}if(captureActive&&previewSource==='live'){await api('api/live/profile',{profile:profile()});toast('校准已应用到当前捕获，结束后使用新范围识别。');}else toast('校准已应用到下一次识别。');$('calibration-dialog').close();}));
-$('crop-canvas').addEventListener('pointerdown',event=>{const rect=event.currentTarget.getBoundingClientRect();cropAnchor=[(event.clientX-rect.left)/rect.width,(event.clientY-rect.top)/rect.height];event.currentTarget.setPointerCapture(event.pointerId);});
+$('auto-find-start').addEventListener('click',safe(beginStartSearch));
+$('preview-auto-start').addEventListener('click',safe(beginStartSearch));
+$('preview-time').addEventListener('input',()=>seekPreview(Number($('preview-time').value),180));
+$('preview-time').addEventListener('change',()=>seekPreview(Number($('preview-time').value)));
+$('preview-prev-frame').addEventListener('click',()=>{if(previewVideo)seekPreview(previewSelected-1/previewVideo.fps);});
+$('preview-next-frame').addEventListener('click',()=>{if(previewVideo)seekPreview(previewSelected+1/previewVideo.fps);});
+$('preview-back-second').addEventListener('click',()=>seekPreview(previewSelected-1));
+$('preview-forward-second').addEventListener('click',()=>seekPreview(previewSelected+1));
+$('calibration-dialog').addEventListener('close',()=>{if(!$('calibration-dialog').open)resetPreview();});
+$('video-path').addEventListener('input',()=>{if($('calibration-dialog').open)$('calibration-dialog').close();resetPreview();});
+$('reset-crop').addEventListener('click',()=>{if(startSearch)cancelStartSearch();startResume=null;cropRect=[0,0,1,1];renderStartSearch();drawCrop();});
+$('start-time').addEventListener('input',()=>{$('start-search-status').textContent='';});
+$('apply-crop').addEventListener('click',safe(async()=>{
+  const session=previewSession;
+  if(previewDisplayed===null||!cropImage)throw Error('请等待当前预览画面载入完成。');
+  if(cropRect[2]-cropRect[0]<.15||cropRect[3]-cropRect[1]<.15)throw Error('请框选完整游戏画面。');
+  if(previewSource==='video'){
+    if($('end-time').value.trim()&&timestampSeconds($('end-time').value)<=previewDisplayed)throw Error('选中的起点不早于结束时间，请先调整侧栏的结束时间。');
+    $('start-time').value=previewClock(previewDisplayed);
+    $('start-search-status').textContent='已使用所选画面 '+previewClock(previewDisplayed)+' 作为战斗起点。';
+    toast('战斗开始已设为 '+previewClock(previewDisplayed)+'，画面校准已应用。');
+  }else if(captureActive){
+    $('apply-crop').disabled=true;
+    try{await api('api/live/profile',{profile:profile()});}
+    finally{if(session===previewSession)renderPreviewControls();}
+    if(session!==previewSession||!$('calibration-dialog').open)return;
+    toast('校准已应用到当前捕获，结束后使用新范围识别。');
+  }
+  else toast('校准已应用到下一次捕获。');
+  $('calibration-dialog').close();
+}));
+$('crop-canvas').addEventListener('pointerdown',event=>{if(startSearch)cancelStartSearch();startResume=null;renderStartSearch();const rect=event.currentTarget.getBoundingClientRect();cropAnchor=[(event.clientX-rect.left)/rect.width,(event.clientY-rect.top)/rect.height];event.currentTarget.setPointerCapture(event.pointerId);});
 $('crop-canvas').addEventListener('pointermove',event=>{if(!cropAnchor)return;const rect=event.currentTarget.getBoundingClientRect(),x=Math.min(1,Math.max(0,(event.clientX-rect.left)/rect.width)),y=Math.min(1,Math.max(0,(event.clientY-rect.top)/rect.height));cropRect=[Math.min(cropAnchor[0],x),Math.min(cropAnchor[1],y),Math.max(cropAnchor[0],x),Math.max(cropAnchor[1],y)];drawCrop();});
 $('crop-canvas').addEventListener('pointerup',()=>{cropAnchor=null;});
 $('help-button').addEventListener('click',()=>$('help-dialog').showModal());

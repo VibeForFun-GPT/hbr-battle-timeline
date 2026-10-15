@@ -22,6 +22,7 @@ from axis import __version__
 from axis.live import CaptureSession, CapturePaused, WindowSource, list_windows
 from axis.model import ALIASES, SCHEMA_VERSION, annotate_rows
 from axis.pipeline import Cancelled, analyze, identify_team_names, save_json
+from axis.start_detection import StartSearchCancelled, find_start
 from axis.vision import DEFAULT_LAYOUT, Video, read_image, save_image
 
 HERE=Path(__file__).resolve().parent
@@ -59,6 +60,43 @@ def parse_time(value):
         for part in parts:result=result*60+float(part)
     if not math.isfinite(result) or result<0:raise ValueError("时间需要为非负数。")
     return result
+
+
+def preview_video(path,timestamp=0,*,include_image=True):
+    """Return Video Metadata and an optional frame-accurate Preview."""
+    if not isinstance(path,str) or not path.strip():
+        raise ValueError("请选择有效的 Video 文件。")
+    requested=parse_time(timestamp) or 0
+    video=Video(path)
+    try:
+        if (not math.isfinite(video.fps) or video.fps<=0 or video.frames<1
+                or not math.isfinite(video.duration) or video.duration<=0):
+            raise ValueError("无法读取 Video 的 FPS 或时长。")
+        maximum=(video.frames-1)/video.fps
+        result={"metadata":video.metadata(),"duration":video.duration,"fps":video.fps,"max_time":maximum}
+        if not include_image:
+            return result
+        import base64
+        import cv2
+        # Seek to an existing Frame, including low-FPS and one-Frame Videos.
+        # The returned time belongs to the displayed Frame, not the input value.
+        frame_index=min(video.frames-1,int(min(requested,maximum)*video.fps+1e-7))
+        video.cap.set(cv2.CAP_PROP_POS_FRAMES,frame_index)
+        ok,frame=video.cap.read()
+        if not ok:
+            raise ValueError(f"无法读取 {frame_index/video.fps:.2f}s 的 Frame。")
+        position=video.cap.get(cv2.CAP_PROP_POS_FRAMES)
+        if math.isfinite(position) and 1<=position<=video.frames:
+            frame_index=max(0,min(video.frames-1,round(position)-1))
+        frame=video.normalize(frame)
+        ok,encoded=cv2.imencode(".jpg",frame,[cv2.IMWRITE_JPEG_QUALITY,87])
+        if not ok:
+            raise ValueError("无法生成 Video Preview。")
+        result.update(time=frame_index/video.fps,frame_index=frame_index,
+                      image="data:image/jpeg;base64,"+base64.b64encode(encoded).decode("ascii"))
+        return result
+    finally:
+        video.close()
 
 
 def validate_profile(profile):
@@ -133,6 +171,7 @@ class Store:
         self.source_factory=source_factory
         self.closed=threading.Event()
         self.catalog_update={"updating":False,"fraction":0.,"message":""}
+        self.start_searches={}
         candidates=[p for p in [self.data/"sample-final",self.data/"sample-v4",self.data/"sample"] if (p/"axis.json").is_file()]
         self.example=candidates[0] if candidates else None
 
@@ -209,6 +248,61 @@ class Store:
         identify_team_names(team,images)
         return {"team":team,"matched":sum(p.get("name_source")=="hbr_quest_avatar" for p in team)-prior,
                 "kept_manual":manual,"unresolved":sum(p.get("name_is_placeholder",False) for p in team),"catalog":self.catalog_state()}
+
+    def find_start_state(self,search_id):
+        with self.lock:
+            record=self.start_searches.get(search_id)
+            if record is None:raise ValueError("起点搜索不存在，请重新开始。")
+            return copy.deepcopy(record["state"])
+
+    def cancel_start_search(self,search_id):
+        with self.lock:
+            record=self.start_searches.get(search_id)
+            if record is None:raise ValueError("起点搜索不存在。")
+            record["cancel"].set()
+        return self.find_start_state(search_id)
+
+    def start_search(self,body):
+        path=body.get("path")
+        if not isinstance(path,str) or not path.strip():raise ValueError("请选择有效的 Video 文件。")
+        path=Path(path).expanduser().resolve()
+        if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:raise ValueError("请选择有效的 Video 文件。")
+        search_from=parse_time(body.get("search_from",0)) or 0
+        profile=validate_profile(body.get("profile",{}))
+        with self.lock:
+            if self.closed.is_set():raise ValueError("服务已关闭。")
+            pending=[record for record in self.start_searches.values() if record["state"]["status"]=="running"]
+            if any(not record["cancel"].is_set() for record in pending):
+                raise ValueError("正在寻找初始画面，请等待完成或取消后重试。")
+            # Cancelled OCR initialization may still be releasing resources.
+            if len(pending)>=4:
+                raise ValueError("已取消的搜索仍在释放资源，请稍后重试。")
+            while len(self.start_searches)>=8:
+                expired=next((key for key,item in self.start_searches.items() if item["state"]["status"]!="running"),None)
+                if expired is None:break
+                self.start_searches.pop(expired)
+            search_id="start-"+secrets.token_hex(6)
+            record={"cancel":threading.Event(),"state":{"id":search_id,"status":"running","found":False,
+                    "fraction":0.,"message":"正在自动寻找可用选招画面","scanned_until":search_from,"result":None}}
+            self.start_searches[search_id]=record
+
+        def worker():
+            def progress(update):
+                with self.lock:record["state"].update(update)
+            try:
+                result=find_start(path,search_from=search_from,layout=profile["layout"],cancel=record["cancel"],progress=progress)
+                if record["cancel"].is_set():raise StartSearchCancelled("已取消自动寻找起点。")
+                with self.lock:
+                    record["state"].update(status="done" if result["found"] else "not_found",found=result["found"],
+                        fraction=1.,message="已找到可用选招画面" if result["found"] else result["message"],result=result)
+            except StartSearchCancelled as error:
+                with self.lock:record["state"].update(status="cancelled",message=str(error))
+            except Exception as error:
+                with self.lock:record["state"].update(status="error",message=str(error),error=str(error))
+
+        record["thread"]=threading.Thread(target=worker,daemon=True)
+        record["thread"].start()
+        return self.find_start_state(search_id)
 
     def create(self,body):
         video=Path(body.get("path","")).expanduser().resolve()
@@ -326,6 +420,7 @@ class Store:
 
     def close(self):
         self.closed.set()
+        for record in list(self.start_searches.values()):record["cancel"].set()
         for item in list(self.running.values()):item["cancel"].set()
         if self.capture and self.capture.snapshot()["active"]:
             self.capture.stop();self.capture.thread.join(timeout=3)
@@ -400,6 +495,8 @@ def make_handler(store,token):
                 if route=="api/bootstrap":
                     self.send_json({"jobs":store.list(),"aliases":ALIASES,"layout":DEFAULT_LAYOUT,"live_supported":os.name=="nt","catalog":store.catalog_state()});return
                 if route=="api/catalog/status":self.send_json(store.catalog_state());return
+                if route.startswith("api/find-start/"):
+                    self.send_json(store.find_start_state(route[len("api/find-start/"):]));return
                 if route=="api/jobs":self.send_json(store.list());return
                 if route=="api/live/windows":self.send_json({"windows":list_windows()});return
                 if route=="api/live/status":
@@ -431,6 +528,9 @@ def make_handler(store,token):
                 if route=="api/catalog/update":self.send_json(store.update_catalog());return
                 if route.startswith("api/names/"):self.send_json(store.identify_names(route[len("api/names/"):]));return
                 if route=="api/analyze":self.send_json(store.create(body));return
+                if route=="api/find-start":self.send_json(store.start_search(body));return
+                if route.startswith("api/find-start/") and route.endswith("/cancel"):
+                    self.send_json(store.cancel_start_search(route[len("api/find-start/"):-len("/cancel")]));return
                 if route=="api/live/start":self.send_json(store.start_live(body));return
                 if route=="api/live/stop":self.send_json(store.stop_live());return
                 if route=="api/live/profile":self.send_json(store.update_live_profile(body.get("profile",{})));return
@@ -453,17 +553,10 @@ def make_handler(store,token):
                     try:path=filedialog.askopenfilename(title="选择绯染天空战斗视频",filetypes=[("Video","*.mp4 *.mkv *.mov *.avi *.webm *.m4v"),("所有文件","*.*")],parent=root)
                     finally:root.destroy()
                     self.send_json({"path":path});return
+                if route=="api/video-info":
+                    self.send_json(preview_video(body["path"],include_image=False));return
                 if route=="api/preview":
-                    video=Video(body["path"])
-                    try:
-                        when=parse_time(body.get("time",0)) or 0
-                        frame=video.frame(when)
-                        import base64
-                        import cv2
-                        data=base64.b64encode(cv2.imencode(".jpg",frame,[cv2.IMWRITE_JPEG_QUALITY,87])[1]).decode("ascii")
-                        self.send_json({"metadata":video.metadata(),"image":"data:image/jpeg;base64,"+data})
-                    finally:video.close()
-                    return
+                    self.send_json(preview_video(body["path"],body.get("time",0)));return
                 if route.startswith("api/cancel/"):
                     job=route[len("api/cancel/"):]
                     if job in store.running:store.running[job]["cancel"].set()
