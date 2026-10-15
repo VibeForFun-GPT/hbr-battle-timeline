@@ -1,0 +1,38 @@
+name: Bug report
+description: 报告识别、界面、Capture 或导出问题。
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue。内容会公开：请隐藏 local path、window title 中的私人信息，以及 Screenshot 中的帐号、昵称、UID。无需提供 API Key。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows 版本、Python 版本、程序版本或 Commit，以及录像或实时 Capture 模式。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 写明操作顺序；识别问题请补充游戏 UI 语言、分辨率，以及经过脱敏的相关设置。
+      placeholder: |
+        1. 选择……
+        2. 点击……
+        3. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 预期结果与实际结果
+      description: 涉及角色、Skill、Turn 或 OD 时，说明出错的一行和确认时间。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 可选的脱敏信息
+      description: 可粘贴 Error、最小 JSON 示例或已脱敏 Screenshot。请勿上传私人录像、完整行动记录、帐号资料或角色图库缓存。

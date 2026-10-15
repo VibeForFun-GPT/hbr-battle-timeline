@@ -1,0 +1,37 @@
+# Runtime data, local environments and downloaded third-party assets.
+/data/**
+!/data/.gitkeep
+!/data/README.md
+.venv/
+venv/
+.analysis/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+/dist/
+/build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Optional, private integration fixtures are never part of a source release.
+/tests/fixtures/**
+!/tests/fixtures/README.md
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.m4v
+*.onnx
+*.zip

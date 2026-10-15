@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>绯染天空 · 战斗行动轴</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header class="topbar"><a class="brand" href="./"><span class="brand-icon">↳</span><span>绯染天空<span class="brand-sub">战斗行动轴</span></span></a><span class="local-badge"><i></i> 本地运行 · 无需 API Key</span><button id="help-button" class="text-button">使用说明</button></header>
+<main>
+<aside class="sidebar">
+  <div class="sidebar-title"><span class="eyebrow">BATTLE → TIMELINE</span><h1>从一场战斗<br>开始一条行动轴</h1><p>直接捕获游戏画面，也可导入录像。记录前排 3 人的 Skill、换位与 OD 时机。</p></div>
+  <section class="input-card"><div class="section-heading"><span class="number">1</span><h2>选择来源</h2></div>
+    <div class="source-toggle"><button id="source-live" class="active" aria-pressed="true">实时捕获</button><button id="source-recording" aria-pressed="false">导入录像</button></div>
+    <div id="live-source"><label>游戏窗口<select id="capture-window"><option value="">请选择游戏窗口</option></select></label><button id="refresh-windows" class="text-button full-width">刷新窗口列表</button><p class="small-note">开始后切回游戏窗口。保持游戏在前台且完整可见；切到其他窗口时暂停取新画面。</p><button id="live-calibrate" class="secondary full-width">预览与画面校准</button><p class="small-note">预览时有 3 秒切回游戏；捕获期间可使用已有画面预览。</p></div>
+    <div id="recording-source" hidden>
+    <button id="pick-video" class="file-picker"><span class="file-icon">▷</span><strong>选择本地视频</strong><small>MP4 · MKV · MOV · AVI · WebM</small></button>
+    <label>视频路径<input id="video-path" type="text" placeholder="也可以粘贴视频的完整路径" spellcheck="false"></label>
+    <div class="two-inputs"><label>战斗开始<input id="start-time" value="00:00" placeholder="01:13"></label><label>结束时间<input id="end-time" placeholder="留空：直到结尾"></label></div>
+    <div class="small-note">填入战斗开始时间。自动匹配队伍头像与角色图库，不确定的名字可稍后核对。</div>
+    <button id="calibrate-button" class="secondary full-width">预览与画面校准</button>
+    </div>
+  </section>
+  <section class="input-card"><div class="section-heading"><span class="number">2</span><h2>开始识别</h2></div>
+    <label>队伍命名<select id="profile-mode"><option value="auto">自动识别角色名字</option><option value="placeholder">手动命名 · Placeholder</option><option value="current">复用当前队伍与 Skill 简写</option><option value="ocr">尝试 OCR 读取配置画面的名字</option></select></label>
+    <div class="catalog-status"><p id="catalog-status" class="small-note" role="status">正在检查角色图库…</p><button id="update-catalog" class="text-button">下载 / 更新角色图库</button></div>
+    <details class="advanced"><summary>识别设置</summary><label>扫描精度<select id="sample-rate"><option value="4">标准 · 4 FPS</option><option value="8">快速操作视频 · 8 FPS</option><option value="2">较慢操作视频 · 2 FPS</option></select></label><button id="import-profile" class="secondary full-width">导入队伍配置 JSON</button></details>
+    <button id="analyze-button" class="primary full-width">开始捕获 <span>→</span></button><button id="end-live" class="primary full-width" hidden>结束并生成行动轴</button><p id="live-hotkey" class="small-note">结束快捷键：Ctrl + Alt + E。也可返回本页点击结束。</p>
+    <div id="progress-box" class="progress-box" hidden><div class="progress-track"><div id="progress-fill"></div></div><p id="progress-text">正在识别</p><button id="cancel-button" class="text-button">停止本次分析</button></div>
+  </section>
+  <div class="history-title">最近的行动轴</div><div id="job-list"></div>
+  <p class="sidebar-footer">角色图库首次下载需要联网，缓存后可离线识别。<br>捕获素材自动保存，方便回看核对。</p>
+</aside>
+<section class="workspace">
+  <div id="empty-state" class="empty-state"><div class="empty-mark">▤</div><h2>在这里查看队伍的行动轴</h2><p>捕获结束或导入录像后，角色、Skill、OD 和确认时间按行排列。<br>不确定的识别会标记出来，点击一行即可回看。</p></div>
+  <div id="document-view" hidden>
+    <div class="workspace-heading"><div><span class="eyebrow">BATTLE TIMELINE</span><input id="document-title" class="title-input" aria-label="行动轴标题"><p id="document-subtitle"></p></div><div class="heading-actions"><button id="save-button" class="secondary">保存修改</button><button id="export-button" class="primary">导出行动轴 ↓</button></div></div>
+    <p id="capture-summary" class="small-note" hidden></p><div class="tabs"><button data-tab="timeline" class="active">行动轴</button><button data-tab="team">队伍与 Skill 简写</button><button data-tab="reference">附件核对</button><span id="unsaved" hidden>有未保存的修改</span></div>
+    <div id="tab-timeline" class="tab-panel">
+      <div class="stat-strip"><div><strong id="count-normal">—</strong><span>Normal Turn</span></div><div><strong id="count-confirm">—</strong><span>行动确认</span></div><div><strong id="count-od">—</strong><span>OD 发动</span></div><div><strong id="count-review">—</strong><span>待核对</span></div><div class="stat-note">选中的 Skill 只写入前排 3 人。<br>完整名称与原始 OCR 可在下方核对。</div></div>
+      <div class="table-toolbar"><div class="view-control"><label><input id="compact-view" type="checkbox"> 合并追加确认</label><label><input id="review-only" type="checkbox"> 只看待核对</label></div><div><select id="od-view" aria-label="OD 读数"><option value="after">行动后 OD</option><option value="before">行动前 OD</option></select><button id="undo-button" class="text-button" title="撤销上一处修改">↶ 撤销</button><button id="add-row" class="text-button">＋ 新增一行</button></div></div>
+      <div class="table-wrap"><table id="axis-table"><thead><tr><th rowspan="2" class="round-col">回合</th><th colspan="2" class="slot-1">前排位置 1</th><th colspan="2" class="slot-2">前排位置 2</th><th colspan="2" class="slot-3">前排位置 3</th><th rowspan="2" id="od-header">行动后 OD</th><th rowspan="2">确认时间</th><th rowspan="2">核对</th></tr><tr><th class="slot-1">角色</th><th class="slot-1">Skill</th><th class="slot-2">角色</th><th class="slot-2">Skill</th><th class="slot-3">角色</th><th class="slot-3">Skill</th></tr></thead><tbody id="axis-body"></tbody></table></div>
+      <p class="table-caption">OD 是视频画面的可见读数；视频未显示的小数无法从整数 OCR 恢复。黄色标记表示需要核对。</p>
+      <div id="inspector" class="inspector" hidden>
+        <div class="inspector-heading"><div><span class="eyebrow">FRAME REVIEW</span><h2 id="inspector-title">逐行核对</h2></div><div><button id="prev-row" class="secondary">← 上一行</button><button id="next-row" class="secondary">下一行 →</button><button id="close-inspector" class="text-button" aria-label="关闭核对面板">✕</button></div></div>
+        <div class="inspector-grid"><div class="evidence"><div class="evidence-tabs"><button id="show-frame" class="active">确认前 Screenshot</button><button id="show-video">原视频</button><span id="frame-time"></span></div><img id="frame-image" alt="行动确认前的游戏画面"><video id="source-video" controls preload="metadata" hidden></video><div class="playback-controls"><button id="step-back" class="secondary">− 0.5 秒</button><button id="seek-row" class="secondary">回到本行</button><button id="step-forward" class="secondary">＋ 0.5 秒</button><button id="capture-frame" class="text-button">使用当前 Frame</button></div><div id="review-notes" class="review-notes"></div></div>
+        <div class="editor"><div class="two-inputs"><label>回合标签<input id="edit-label"></label><label>视频 TURN<input id="edit-turn" type="number" min="1" max="999"></label></div><div class="two-inputs"><label>回合类型<select id="edit-kind"><option value="normal">Normal Turn</option><option value="pre_od">前置 OD</option><option value="post_od">后置 OD</option><option value="od">OD 内</option><option value="extra">追加回合</option></select></label><label>确认时间（秒）<input id="edit-time" type="number" min="0" step="0.01"></label></div>
+          <div id="action-editors"></div><label class="review-check"><input id="apply-skill-everywhere" type="checkbox"> 同一角色的相同 Skill 同步修改到其他行</label><div class="two-inputs"><label>行动前 OD<input id="edit-od-before" type="number" step="0.01"></label><label>行动后 OD<input id="edit-od-after" type="number" step="0.01"></label></div><label>备注<textarea id="edit-note" rows="2" placeholder="例如：目标、特殊操作或核对说明"></textarea></label><label class="review-check"><input id="edit-reviewed" type="checkbox"> 这一行已经核对</label><div class="editor-actions"><button id="apply-row" class="primary">应用到这一行</button><button id="delete-row" class="text-button danger">删除此行</button></div>
+        </div></div>
+      </div>
+    </div>
+    <div id="tab-team" class="tab-panel" hidden><div class="panel-intro"><h2>自动识别队伍，也可自行命名</h2><p>按首次选招画面的头像匹配 HBR Quest 角色图库。只有可靠匹配才自动填写名字；不确定时保留 Placeholder 并列出候选。手动填写的名字会优先保留，换位后的所有行动同步更新。</p></div><div class="team-naming-actions"><button id="identify-team" class="secondary">自动识别队伍名字</button><p id="team-placeholder-note" class="small-note"></p></div><div id="team-grid" class="team-grid"></div><div class="panel-actions"><button id="apply-team" class="primary">应用队伍名称</button><button id="reset-team" class="secondary">恢复为 Placeholder</button><button id="download-profile" class="secondary">保存为可复用队伍配置</button></div><div class="panel-intro"><h2>本次视频的 Skill 与简写</h2><p>任意 Skill 都按 OCR 文本记录，未设置简写时显示完整文本。这里列出本次识别到的 Skill，可以自由补充简写；只在完整名称匹配时应用。</p><p>可参考 <a href="https://hbr.quest/" target="_blank" rel="noopener noreferrer">HBR Quest 数据库</a>核对名称。</p></div><div id="alias-list" class="alias-list"></div><button id="add-alias" class="secondary">＋ 添加任意 Skill</button><button id="apply-aliases" class="primary">应用简写</button><datalist id="skill-options"></datalist></div>
+    <div id="tab-reference" class="tab-panel" hidden><div class="panel-intro"><h2>附件是独立的核对参考</h2><p>程序从视频识别行动。示例视频与附件有差异，附件不会被复制为识别结果。</p></div><div class="reference-layout"><div id="reference-image-box"></div><div id="reference-notes" class="reference-notes"><p>可以通过点击行动轴的每一行，回到对应的选招画面核对。</p></div></div></div>
+  </div>
+</section>
+</main>
+<dialog id="calibration-dialog"><div class="dialog-heading"><h2>画面校准</h2><button class="text-button" data-close="calibration-dialog">✕</button></div><p id="preview-instructions">有边框时，拖动框选完整游戏画面。请包含左侧 TURN、右上角 OD 和底部 6 人头像。</p><div class="two-inputs"><label id="preview-time-label">预览时间<input id="preview-time" value="01:13"></label><button id="load-preview" class="secondary">载入 Frame</button></div><canvas id="crop-canvas" width="960" height="540"></canvas><p id="crop-caption">默认使用完整画面</p><div class="dialog-footer"><button id="reset-crop" class="secondary">恢复完整画面</button><button id="apply-crop" class="primary">应用校准</button></div></dialog>
+<dialog id="export-dialog"><div class="dialog-heading"><h2>导出行动轴</h2><button class="text-button" data-close="export-dialog">✕</button></div><p>所有文件保存在当前分析目录。Excel 包含简写、完整名称与识别依据；ZIP 包含核对 Screenshot。</p><div id="download-links" class="download-links"></div><p id="export-note"></p></dialog>
+<dialog id="help-dialog"><div class="dialog-heading"><h2>使用说明</h2><button class="text-button" data-close="help-dialog">✕</button></div><ol><li>实时模式：选择游戏窗口，点击开始后切回游戏。在第一回合选招前开始；结束时按 Ctrl + Alt + E 或返回此页点「结束并生成行动轴」。</li><li>游戏离开前台或最小化时暂停取新画面；保持游戏完整可见。结束后自动识别并生成图表，捕获素材可回看，不含 Audio。</li><li>录像模式：点击「导入录像」，选择视频并填写战斗开始时间。有边框时使用「画面校准」。</li><li>默认自动匹配角色头像与 HBR Quest 图库。首次下载需要联网，缓存后可离线识别。名字不确定时保留 Placeholder；在「队伍与 Skill 简写」查看候选或自行填写，也可给已有行动轴自动补全名字。手动名字优先保留。</li><li>任意 Skill 都保留 OCR 文本。点击黄色行修正完整名称和简写；同一角色相同 Skill 可同步修改。保存后导出 PNG、Excel、CSV、HTML、JSON 或 ZIP。</li></ol><p>前置 OD 在该 Normal Turn 确认前发动；后置 OD 在确认后发动。Skill 产生的额外行动标为「追加」。</p><p>剪辑跳过选招、头像遮挡或切换窗口期间的遗漏需要核对。日文 UI 需要替换 OCR Model；默认 Model 用于中文与 English。</p></dialog>
+<div id="toast" role="status" hidden></div><input id="profile-file" type="file" accept=".json" hidden><script src="app.js"></script>
+</body>
+</html>
