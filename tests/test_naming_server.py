@@ -67,7 +67,10 @@ class NamingServerTests(unittest.TestCase):
                 self.assertEqual(result['unresolved'],0)
                 self.assertEqual(result['team'][0]['alias'],'我的队员')
                 self.assertEqual([p['name'] for p in result['team'][1:]],expected[1:])
-                self.assertEqual(store.document('naming-test'),doc)
+                loaded=store.document('naming-test')
+                self.assertEqual(loaded.pop('coverage')['status'],'no_numbered_gaps_detected')
+                self.assertEqual(loaded,doc)
+                self.assertEqual(json.loads((folder/'axis.json').read_text(encoding='utf8')),doc)
                 edited=copy.deepcopy(doc);edited['team']=result['team']
                 conn.request('POST','/naming/api/save/naming-test',json.dumps({'document':edited}),{'Content-Type':'application/json'})
                 response=conn.getresponse();saved=json.loads(response.read());self.assertEqual(response.status,200,saved)

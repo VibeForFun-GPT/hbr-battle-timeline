@@ -11,7 +11,7 @@ import time
 import cv2
 
 from .avatar_names import AvatarNameMatcher
-from .model import SCHEMA_VERSION, annotate_rows, build_team, stamp
+from .model import SCHEMA_VERSION, annotate_coverage, annotate_rows, build_team, stamp
 from .start_detection import bootstrap_evidence
 from .vision import Avatars, Reader, Video, save_image
 
@@ -314,6 +314,7 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
             document["name_recognition"]=naming_status
             if naming_status["unresolved"]:
                 document["warnings"].append(f"{naming_status['unresolved']} 个 Avatar 未从本地图库识别，已保留 Placeholder；请核对队伍名字。")
+        annotate_coverage(document)
         save_json(output/"axis.json",document)
         save_json(output/"axis.automatic.json",document)
         report(1.,f"识别完成：{len(rows)} 次行动确认，{sum(r['needs_review'] for r in rows)} 行待核对")

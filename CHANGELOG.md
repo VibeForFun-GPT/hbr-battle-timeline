@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 检测 TURN 编号跳跃，显示未提取回合、时间范围与原视频回看入口。
+- PNG、HTML、Excel、CSV 与 JSON 保留缺口说明，缺口内的未知行动不推定为 A。
+
 - Video 校准支持 Timeline Slider、逐 Frame 微调与直接设定战斗起点。
 - 自动寻找可用初始 Frame，支持后台进度、取消与继续搜索。
 - 兼容 `TURN 1` 与 `TURN 1/30` 格式，修复前者无法开始分析的问题。

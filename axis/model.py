@@ -1,6 +1,7 @@
 """行动轴的数据结构、简写和 Turn / OD State Machine。"""
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 
@@ -53,6 +54,63 @@ def build_team(supplied=None):
 def stamp(seconds):
     minutes, rest = divmod(max(0.0, float(seconds)), 60)
     return f"{int(minutes):02d}:{rest:05.2f}"
+
+
+def turn_coverage(rows):
+    """Describe numbered gaps without inventing Turns, Actions or Skills."""
+    gaps=[]
+    for index,(after,before) in enumerate(zip(rows,rows[1:]),1):
+        first,last=after.get("turn"),before.get("turn")
+        if type(first) is not int or type(last) is not int or not(1<=first<last<=999) or last-first<=1:
+            continue
+        missing=list(range(first+1,last))
+        after_id=after.get("id") or f"row-{index}"
+        before_id=before.get("id") or f"row-{index+1}"
+        start,end=after.get("confirm_time"),before.get("phase_start")
+        def valid_time(value):
+            return float(value) if type(value) in (int,float) and math.isfinite(value) and value>=0 else None
+        numbered=str(missing[0]) if len(missing)==1 else f"{missing[0]}–{missing[-1]}"
+        gaps.append({"id":f"turn-gap-{after_id}-{before_id}","after_turn":first,"before_turn":last,
+                     "missing_turns":missing,"after_row_id":after_id,"before_row_id":before_id,
+                     "start_time":valid_time(start),"end_time":valid_time(end),
+                     "message":f"TURN {numbered} 未提取到选招/确认记录，请核对原视频；未补写 Skill。"})
+    return {"status":"gaps_detected" if gaps else "no_numbered_gaps_detected",
+            "missing_turn_count":sum(len(gap["missing_turns"]) for gap in gaps),"gaps":gaps}
+
+
+def _coverage_warning(coverage):
+    return (f"行动轴存在 {len(coverage['gaps'])} 处 TURN 缺口，共 {coverage['missing_turn_count']} 个回合编号没有选招/确认记录；"
+            "未补写 Skill，请核对原视频。")
+
+
+def annotate_coverage(document):
+    """Attach derived Coverage in memory; preserve Actions and manual review data."""
+    rows=document.get("rows",[])
+    previous=document.get("coverage")
+    if isinstance(previous,dict) and isinstance(previous.get("gaps"),list):
+        old_messages={gap.get("message") for gap in previous["gaps"] if isinstance(gap,dict) and isinstance(gap.get("message"),str)}
+        for row in rows:
+            if isinstance(row.get("notes"),list):row["notes"]=[note for note in row["notes"] if note not in old_messages]
+        if isinstance(document.get("warnings"),list) and isinstance(previous.get("missing_turn_count"),int):
+            warning=_coverage_warning(previous)
+            document["warnings"]=[item for item in document["warnings"] if item!=warning]
+    coverage=turn_coverage(rows)
+    document["coverage"]=coverage
+    by_id={row.get("id") or f"row-{index}":row for index,row in enumerate(rows,1)}
+    for gap in coverage["gaps"]:
+        row=by_id[gap["before_row_id"]]
+        row["needs_review"]=True
+        notes=row.get("notes")
+        if not isinstance(notes,list):notes=[notes] if isinstance(notes,str) and notes else []
+        if gap["message"] not in notes:notes.append(gap["message"])
+        row["notes"]=notes
+    if coverage["gaps"]:
+        warnings=document.get("warnings")
+        if not isinstance(warnings,list):warnings=[]
+        warning=_coverage_warning(coverage)
+        if warning not in warnings:warnings.append(warning)
+        document["warnings"]=warnings
+    return document
 
 
 def annotate_rows(rows):

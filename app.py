@@ -20,7 +20,7 @@ import webbrowser
 from axis.export import export_all, export_bundle
 from axis import __version__
 from axis.live import CaptureSession, CapturePaused, WindowSource, list_windows
-from axis.model import ALIASES, SCHEMA_VERSION, annotate_rows
+from axis.model import ALIASES, SCHEMA_VERSION, annotate_coverage, annotate_rows
 from axis.pipeline import Cancelled, analyze, identify_team_names, save_json
 from axis.start_detection import StartSearchCancelled, find_start
 from axis.vision import DEFAULT_LAYOUT, Video, read_image, save_image
@@ -156,7 +156,7 @@ def validate_document(document,original):
     # Video 源路径与原始分析 Metadata 只能由 Server 确定。
     document["video"]=copy.deepcopy(original["video"])
     document["review_history"]=original.get("review_history",[])+[{"at":datetime.now().astimezone().isoformat(),"rows":len(rows),"reviewed":sum(bool(r.get('reviewed')) for r in rows)}]
-    return document
+    return annotate_coverage(document)
 
 
 class Store:
@@ -206,7 +206,7 @@ class Store:
         with self.lock:
             path=self.folder(job_id)/"axis.json"
             if not path.exists():raise ValueError("分析尚未完成。")
-            return json.loads(path.read_text(encoding="utf-8"))
+            return annotate_coverage(json.loads(path.read_text(encoding="utf-8")))
 
     def catalog_state(self):
         with self.lock:

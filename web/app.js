@@ -10,6 +10,7 @@ let catalogState=null,catalogTimer=null,catalogPolling=false,namesBusy=false;
 let previewSession=0,previewSequence=0,previewPending=null,previewBusy=false,previewTimer=null;
 let previewVideo=null,previewSelected=0,previewDisplayed=null,previewMetadata=null;
 let startSearch=null,startResume=null,startOpening=false;
+let activeGap=null;
 
 async function api(path,body,allowStatusError=false){
   const response = await fetch(path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
@@ -86,8 +87,43 @@ function compactRows(){
   return rows;
 }
 
+function currentCoverage(){
+  if(!doc)return {gaps:[],missing_turn_count:0};
+  if(!dirty&&doc.coverage)return doc.coverage;
+  const gaps=[];
+  for(let index=1;index<doc.rows.length;index++){
+    const after=doc.rows[index-1],before=doc.rows[index];
+    if(!Number.isInteger(after.turn)||!Number.isInteger(before.turn)||after.turn<1||before.turn>999||before.turn<=after.turn+1)continue;
+    const start=Number.isFinite(after.confirm_time)?after.confirm_time:Number.isFinite(after.time)?after.time:null;
+    const end=Number.isFinite(before.phase_start)?before.phase_start:Number.isFinite(before.time)?before.time:null;
+    gaps.push({id:'gap-'+before.id,after_turn:after.turn,before_turn:before.turn,missing_turns:Array.from({length:before.turn-after.turn-1},(_,i)=>after.turn+i+1),after_row_id:after.id,before_row_id:before.id,start_time:start,end_time:end});
+  }
+  return {gaps,missing_turn_count:gaps.reduce((total,gap)=>total+gap.missing_turns.length,0)};
+}
+function gapLabel(gap){const first=gap.missing_turns[0],last=gap.missing_turns.at(-1);return (first===last?first:first+'–'+last)+' 回合未提取';}
+function gapTime(gap){return Number.isFinite(gap.start_time)&&Number.isFinite(gap.end_time)?clock(gap.start_time)+'–'+clock(gap.end_time):'时间未记录';}
+function gapButton(gap){return `<button class="gap-link" data-gap-id="${escapeHtml(gap.id)}">${escapeHtml(gapLabel(gap))} · ${gapTime(gap)} · 回看视频 ↗</button>`;}
+function renderCoverage(){
+  const coverage=currentCoverage();$('coverage-banner').hidden=!coverage.gaps.length;
+  $('coverage-title').textContent=coverage.gaps.length+' 段回合缺少行动记录，共 '+coverage.missing_turn_count+' 个回合';
+  $('coverage-gaps').innerHTML=coverage.gaps.map(gapButton).join('');
+  return coverage;
+}
+function openGap(id){
+  const gap=currentCoverage().gaps.find(item=>item.id===id);if(!gap)return;
+  activeGap=gap;
+  $('gap-title').textContent=gapLabel(gap);
+  $('gap-range').textContent=gapTime(gap)+'。这段没有提取到可用的选招与行动确认；Skill 保留为未识别。可回看自动战斗、剪辑或画面遮挡的情况。';
+  $('gap-start').disabled=!Number.isFinite(gap.start_time);$('gap-end').disabled=!Number.isFinite(gap.end_time);
+  const video=$('gap-video');video.pause();
+  video.onloadedmetadata=()=>{if(activeGap?.id===gap.id&&$('gap-dialog').open&&Number.isFinite(gap.start_time))video.currentTime=Math.min(gap.start_time,Math.max(0,video.duration-.05));};
+  video.src=encodeURI('video/'+currentJob);
+  $('gap-dialog').showModal();
+}
+
 function renderTable(){
   if(!doc)return;
+  const coverage=renderCoverage(),gaps=new Map(coverage.gaps.map(gap=>[gap.before_row_id,gap]));
   let rows=$('compact-view').checked?compactRows():doc.rows.map((r,i)=>({...r,sourceIndex:i,sources:[i],extra_actions:[]}));
   if($('review-only').checked)rows=rows.filter(r=>r.needs_review&&!r.reviewed);
   $('od-header').textContent=$('od-view').value==='after'?'行动后 OD':'行动前 OD';
@@ -96,7 +132,8 @@ function renderTable(){
     const actions=row.actions.map((a,i)=>`<td title="${escapeHtml(a.character_full)}">${escapeHtml(a.character)}</td><td class="skill" title="${escapeHtml(a.skill_full)}${row.extra_actions.length?'；追加换人：'+escapeHtml(row.extra_actions.map(a=>a.character+' '+a.skill).join('、')):''}">${escapeHtml(a.skill)}</td>`).join('');
     const od=row[$('od-view').value==='after'?'od_after':'od_before'];
     const review=row.reviewed?'<span class="review-ok">✓</span>':row.needs_review?'<span class="review-pill">待核对</span>':'<span style="color:#b0bccd">·</span>';
-    return `<tr data-index="${row.sourceIndex}" class="${row.sources.includes(selectedIndex)?'selected':''}" title="点击核对${row.sources.length>1?'；本行合并了 '+row.sources.length+' 次确认':''}"><td class="round ${special?'special':''}">${escapeHtml(row.label)}</td>${actions}<td class="od">${od===null||od===undefined?'—':escapeHtml(Number(od).toString())}</td><td class="time">${clock(row.confirm_time)}</td><td class="review">${review}</td></tr>`;
+    const gap=gaps.get(row.id),gapRow=gap?`<tr class="coverage-gap-row"><td colspan="10">${gapButton(gap)}<span>角色与 Skill 未识别</span></td></tr>`:'';
+    return gapRow+`<tr data-index="${row.sourceIndex}" class="${row.sources.includes(selectedIndex)?'selected':''}" title="点击核对${row.sources.length>1?'；本行合并了 '+row.sources.length+' 次确认':''}"><td class="round ${special?'special':''}">${escapeHtml(row.label)}</td>${actions}<td class="od">${od===null||od===undefined?'—':escapeHtml(Number(od).toString())}</td><td class="time">${clock(row.confirm_time)}</td><td class="review">${review}</td></tr>`;
   }).join('');
   $('count-normal').textContent=new Set(doc.rows.filter(r=>r.kind==='normal').map(r=>r.turn)).size;
   $('count-confirm').textContent=doc.rows.length;
@@ -141,6 +178,7 @@ async function loadJob(id){
   if(!result.document){if(result.job.status==='running'){runningJob=id;updateProgress(result.job);}toast(result.job.message);return;}
   currentJob=id;
   if(result.document){
+    if($('gap-dialog').open)$('gap-dialog').close();
     doc=result.document;dirty=false;undo=[];selectedIndex=-1;
     $('unsaved').hidden=true;$('empty-state').hidden=true;$('document-view').hidden=false;$('inspector').hidden=true;
     $('document-title').value=doc.title;
@@ -452,6 +490,11 @@ $('job-list').addEventListener('click',safe(async event=>{const button=event.tar
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>showTab(button.dataset.tab)));
 for(const id of ['compact-view','review-only','od-view'])$(id).addEventListener('change',renderTable);
 $('axis-body').addEventListener('click',event=>{const row=event.target.closest('[data-index]');if(row){openInspector(Number(row.dataset.index));$('inspector').scrollIntoView({behavior:'smooth',block:'nearest'});}});
+$('axis-body').addEventListener('click',event=>{const button=event.target.closest('[data-gap-id]');if(button)openGap(button.dataset.gapId);});
+$('coverage-gaps').addEventListener('click',event=>{const button=event.target.closest('[data-gap-id]');if(button)openGap(button.dataset.gapId);});
+$('gap-start').addEventListener('click',()=>{if(activeGap)$('gap-video').currentTime=activeGap.start_time;});
+$('gap-end').addEventListener('click',()=>{if(activeGap)$('gap-video').currentTime=activeGap.end_time;});
+$('gap-dialog').addEventListener('close',()=>{activeGap=null;$('gap-video').pause();$('gap-video').onloadedmetadata=null;});
 $('prev-row').addEventListener('click',()=>openInspector(selectedIndex-1));
 $('next-row').addEventListener('click',()=>openInspector(selectedIndex+1));
 $('close-inspector').addEventListener('click',()=>{$('inspector').hidden=true;$('source-video').pause();selectedIndex=-1;renderTable();});
@@ -511,7 +554,8 @@ $('export-button').addEventListener('click',safe(async()=>{
     const data=await api('api/export/'+currentJob,{compact:$('compact-view').checked,od:$('od-view').value});
     const names={png:'PNG 图表',xlsx:'Excel · 含完整名称',csv:'CSV 表格',json:'JSON 行动数据',html:'HTML 预览',zip:'ZIP · 全部核对资料'};
     $('download-links').innerHTML=Object.entries(data.files).map(([type,path])=>`<a href="${encodeURI(path)}?download=1" download>${names[type]}</a>`).join('');
-    const count=doc.rows.filter(r=>r.needs_review&&!r.reviewed).length;$('export-note').textContent=count?'当前有 '+count+' 行待核对，导出文件会保留标记。':'所有待核对行均已确认。';
+    const count=doc.rows.filter(r=>r.needs_review&&!r.reviewed).length,gaps=currentCoverage().gaps.length;
+    $('export-note').textContent=gaps?'当前有 '+gaps+' 段回合缺少行动记录，导出文件会明确保留缺口。':count?'当前有 '+count+' 行待核对，导出文件会保留标记。':'所有待核对行均已确认。';
     $('export-dialog').showModal();
   }finally{$('export-button').disabled=false;}
 }));
