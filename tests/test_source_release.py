@@ -20,7 +20,7 @@ class SourceReleaseTests(unittest.TestCase):
                          "tools/private.mp4", "web/avatar.webp", "../outside.py"):
             self.assertFalse(allowed(relative), relative)
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for relative in ("axis/model.py", "data/server.json", "data/character-catalog/catalog.json", "tests/fixtures/bootstrap.jpg"):
                 target = root / relative; target.parent.mkdir(parents=True, exist_ok=True); target.write_text("private", encoding="utf-8")
             self.assertEqual([p.relative_to(root).as_posix() for p in source_files(root)], ["axis/model.py"])
