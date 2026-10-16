@@ -131,6 +131,8 @@ def annotate_rows(rows):
         turn = row.get("turn")
         bonus = row.get("bonus")
         row["od_session"] = None
+        row.pop("od_timing",None)
+        row.pop("od_action_count",None)
         if bonus:
             current = (turn, bonus[0], bonus[1])
             fresh = (last_bonus is None or turn != last_bonus[0] or

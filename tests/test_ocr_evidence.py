@@ -16,6 +16,16 @@ def detection(text,x,y=25,width=40,score=.96):
 
 
 class CounterEvidenceTests(unittest.TestCase):
+    def test_reannotation_drops_stale_od_timing_and_session_count(self):
+        rows=annotate_rows([{'turn':3,'bonus':[1,2]},
+                            {'turn':3,'bonus':[2,2],'od_timing':'pre','od_action_count':99},
+                            {'turn':3,'bonus':None,'od_timing':'pre','od_action_count':99}])
+        self.assertEqual(rows[0]['od_action_count'],2)
+        self.assertNotIn('od_timing',rows[1])
+        self.assertNotIn('od_timing',rows[2])
+        self.assertNotIn('od_action_count',rows[1])
+        self.assertNotIn('od_action_count',rows[2])
+
     def test_unreadable_bonus_keeps_session_context_without_filling_counter(self):
         rows=annotate_rows([{'turn':3,'bonus':[1,2]},
                             {'turn':3,'bonus':None,'bonus_unreadable':True},
