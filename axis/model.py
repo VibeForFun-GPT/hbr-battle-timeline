@@ -119,6 +119,13 @@ def annotate_rows(rows):
     同一个 Normal Turn 的重复确认是追加回合。前置 OD 的 BONUS
     先于该 Normal Turn 确认；后置 OD 的 BONUS 在该 Turn 确认之后。
     """
+    def flag_unknown(row,message):
+        notes=row.get("notes")
+        if not isinstance(notes,list):notes=[notes] if isinstance(notes,str) and notes else []
+        if message not in notes:notes.append(message)
+        row["notes"]=notes
+        row["needs_review"]=True
+
     normal_seen, session, last_bonus, extra_count = set(), 0, None, 0
     for i, row in enumerate(rows):
         turn = row.get("turn")
@@ -132,6 +139,15 @@ def annotate_rows(rows):
             if fresh:
                 session += 1
                 extra_count = 0
+            if turn is None:
+                row["kind"],row["label"]="od","OD（时机待核对）"
+                row["od_timing"]="unknown"
+                flag_unknown(row,"TURN Counter 不可读，无法判定前置或后置 OD；请核对。")
+            elif fresh and bonus[0]!=1 and not row.get("od_activation"):
+                row["kind"],row["label"]="od","OD（起点待核对）"
+                row["od_timing"]="unknown"
+                flag_unknown(row,"首次可读 BONUS 不是 1，无法判定 OD 起点或时机；请核对。")
+            elif fresh:
                 row["kind"] = "post_od" if turn in normal_seen else "pre_od"
                 row["label"] = f"{'后置' if row['kind'] == 'post_od' else '前置'}OD{row.get('od_level') or bonus[1]}"
                 row["od_timing"] = "post" if row["kind"] == "post_od" else "pre"
@@ -145,12 +161,23 @@ def annotate_rows(rows):
             last_bonus = current
         else:
             row["bonus_text"] = ""
-            if turn in normal_seen:
+            if row.get("bonus_unreadable"):
+                row["kind"],row["label"]="od","OD（Counter 待核对）"
+                row["od_timing"]="unknown"
+                flag_unknown(row,"BONUS Counter 不可读，无法判定 OD 时机或追加；请核对。")
+                if last_bonus and (turn is None or turn==last_bonus[0]):
+                    row["od_session"]=session
+            elif turn is None:
+                row["kind"],row["label"]="normal","待核对"
+                row.pop("od_timing",None)
+                flag_unknown(row,"TURN Counter 不可读，回合编号待核对；未将未知回合合并为追加。")
+            elif turn in normal_seen:
                 row["kind"], row["label"] = "extra", "追加"
             else:
                 normal_seen.add(turn)
                 row["kind"], row["label"] = "normal", str(turn) if turn is not None else "待核对"
-            last_bonus = None
+            if not row.get("bonus_unreadable"):
+                last_bonus = None
         row["index"] = i + 1
     for number in range(1, session + 1):
         group = [r for r in rows if r.get("od_session") == number]
@@ -172,7 +199,7 @@ def compact_rows(rows):
     """合并追加确认，保持 Character Identity，避免换位后拼错 Skill。"""
     result = []
     for row in rows:
-        if row.get("kind") == "extra" and result and row.get("turn") == result[-1].get("turn") and row.get("od_session") == result[-1].get("od_session"):
+        if row.get("kind") == "extra" and row.get("turn") is not None and result and row.get("turn") == result[-1].get("turn") and row.get("od_session") == result[-1].get("od_session"):
             previous = result[-1]
             by_id = {a["character_id"]: a for a in previous["actions"]}
             for action in row["actions"]:

@@ -110,6 +110,13 @@ def validate_profile(profile):
     if len(rect)!=4 or not all(isinstance(x,(int,float)) and math.isfinite(x) for x in rect) or not(0<=rect[0]<rect[2]<=1 and 0<=rect[1]<rect[3]<=1):raise ValueError("Crop 需要是有效的 [left, top, right, bottom] 比例范围。")
     centers=layout["portrait_centers"]
     if len(centers)!=6 or any(len(p)!=2 or not all(isinstance(v,(int,float)) and math.isfinite(v) for v in p) or not(0<=p[0]<1920 and 0<=p[1]<1080) for p in centers):raise ValueError("Avatar Center 需要为游戏画面中的 6 个有效位置。")
+    if "portrait_radii" in layout:
+        radii=layout["portrait_radii"]
+        if (not isinstance(radii,(list,tuple)) or len(radii)!=6 or
+                any(not isinstance(pair,(list,tuple)) or len(pair)!=2 or
+                    any(type(value) not in (int,float) or not math.isfinite(value) or not 10<=value<=300 for value in pair)
+                    for pair in radii)):
+            raise ValueError("Avatar Radii 需要为 6 组正且有限的 [rx, ry]，范围为 10–300。")
     for key in ("portrait_boxes","skill_boxes","role_boxes"):
         expected=3 if key=="skill_boxes" else 6
         if len(layout[key])!=expected:raise ValueError(f"{key} 的位置数量不正确。")

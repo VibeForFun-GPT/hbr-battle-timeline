@@ -1,5 +1,7 @@
 # Tests
 
+真实 B 站样本的逐项结果及尚未通过的项目见 [真实 Video 验证](real-video-validation.md)。Unit Tests 通过不代表真实 OCR 已达到可直接发布的准确度。
+
 在 Repository Root 安装 `requirements.txt` 后运行：
 
 ```powershell

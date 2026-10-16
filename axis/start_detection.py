@@ -9,6 +9,7 @@ import time
 import cv2
 import numpy as np
 
+from .layout_detection import detect_layout
 from .vision import DEFAULT_LAYOUT, Reader, Video
 
 
@@ -18,25 +19,38 @@ class StartSearchCancelled(Exception):
 
 def bootstrap_evidence(frame,layout,reader):
     """Apply the Pipeline's Avatar Color Gate plus selection-state checks."""
+    candidate=detect_layout(frame,layout)
+    if not candidate:
+        return {"accepted":False,"colored_avatars":0,"detailed_avatars":0,"button_pink":0.,
+                "turn":None,"reason":"six_avatar_geometry_missing"}
+    suggested=candidate["layout"]
+    offsets=np.linalg.norm(np.asarray(suggested["portrait_centers"])-np.asarray(layout["portrait_centers"]),axis=1)
+    effective=layout if float(offsets.max())<30 else suggested
     small=cv2.resize(frame,(960,540))
     hsv=cv2.cvtColor(small,cv2.COLOR_BGR2HSV)
     colors=((hsv[:,:,0]>=138)&(hsv[:,:,0]<=178)&(hsv[:,:,1]>65)&(hsv[:,:,2]>105))
-    ratios=[float(colors[b[1]//2:b[3]//2,b[0]//2:b[2]//2].mean()) for b in layout["portrait_boxes"]]
+    ratios=[float(colors[b[1]//2:b[3]//2,b[0]//2:b[2]//2].mean()) for b in effective["portrait_boxes"]]
     colored=sum(value>.10 for value in ratios)
-    x1,y1,x2,y2=map(int,layout["button_box"])
+    x1,y1,x2,y2=map(int,effective["button_box"])
     button=cv2.cvtColor(frame[y1:y2,x1:x2],cv2.COLOR_BGR2HSV)
     button_pink=float(((button[:,:,0]>136)&(button[:,:,0]<179)&(button[:,:,1]>65)&(button[:,:,2]>105)).mean())
     gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     detail=[]
-    for x,y in layout["portrait_centers"]:
+    for x,y in effective["portrait_centers"]:
         patch=gray[int(y)-15:int(y)+57,int(x)-39:int(x)+39]
         detail.append(float(patch.std()) if patch.size else 0.)
     detailed=sum(value>=8 for value in detail)
     result={"accepted":False,"colored_avatars":colored,"avatar_color_ratios":[round(v,3) for v in ratios],
-            "detailed_avatars":detailed,"button_pink":round(button_pink,3),"turn":None,"reason":"not_selection"}
+            "detailed_avatars":detailed,"button_pink":round(button_pink,3),"turn":None,"reason":"not_selection",
+            "layout":effective,"layout_detection":candidate["evidence"],"layout_adjusted":effective is not layout}
     if colored<5 or button_pink<=.5 or detailed<5:
         return result
-    status=reader.status(frame)
+    previous_layout=getattr(reader,"layout",None)
+    reader.layout=effective
+    try:
+        status=reader.status(frame)
+    finally:
+        if previous_layout is not None:reader.layout=previous_layout
     result.update(turn=status.get("turn"),turn_raw=status.get("raw",{}).get("turn",""),
                   turn_confidence=float(status.get("confidence",{}).get("turn",0.)))
     if status.get("turn") is None:
@@ -85,7 +99,7 @@ def find_start(path,*,search_from=0,layout=None,cancel=None,progress=None,
                 confidence=min(.99,.65+.15*evidence["colored_avatars"]/6+.1*evidence["detailed_avatars"]/6
                                +.1*evidence.get("turn_confidence",0.))
                 return {"found":True,"time":scanned_until,"metadata":metadata,"duration":video.duration,"fps":video.fps,
-                        "max_time":max(0.,(video.frames-1)/video.fps),"crop":list(effective["crop"]),
+                        "max_time":max(0.,(video.frames-1)/video.fps),"crop":list(effective["crop"]),"layout":evidence.get("layout",effective),
                         "confidence":round(confidence,3),"evidence":evidence,"checked_frames":checked,
                         "image":"data:image/jpeg;base64,"+base64.b64encode(encoded).decode("ascii")}
             if progress and (checked==1 or checked%4==0):

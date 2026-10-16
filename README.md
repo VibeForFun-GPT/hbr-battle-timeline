@@ -4,6 +4,8 @@
 
 程序在本机运行，无需 API Key。识别结果可编辑，并导出 PNG、Excel、CSV、JSON、HTML 或带 Screenshot 的 ZIP。
 
+**当前结果需要人工核对。** 多条 B 站真实视频实测仍存在 Skill 错字/漏读、BONUS 漏检和非标准 Layout 的行动状态误判；不能保证任意视频准确出轴。样本、核对口径、已修复问题与剩余限制见 [真实 Video 验证报告](docs/real-video-validation.md)。
+
 ## 快速开始
 
 当前支持 **Windows 10 / 11、64-bit Python 3.11 或 3.12**，推荐 Python 3.12。RapidOCR 1.4.4 不支持 Python 3.13+。
@@ -60,6 +62,8 @@ py -3.12 -m venv .venv
 ## 支持范围
 
 界面按常见横屏 6 人战斗 UI、1920 × 1080 基准处理，可通过 Crop 校准边框。默认 OCR Model 面向中文和 English。头像严重遮挡、低分辨率、UI 改版、日文 Skill、录像剪辑省略选招等情况需要人工核对或调整 Layout / Model。
+
+自动起点会检查六个 Avatar Ring 和 Confirm 按钮；非标准画面会尝试推导 ROI，歧义时继续寻找。自动找到 Frame 只代表可以开始分析，不能保证后续 Skill 和 OD 全部正确。不可读 TURN 保留 unknown，不能确定的 OD 时机显示待核对。
 
 这是可编辑的自动草稿工具。Capture 的自动流程经过模拟 Source 和窗口范围 Tests；实际游戏、服别和录制方式仍需自行验证预览与结果。
 

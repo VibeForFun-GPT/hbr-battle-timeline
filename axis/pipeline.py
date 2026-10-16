@@ -11,7 +11,8 @@ import time
 import cv2
 
 from .avatar_names import AvatarNameMatcher
-from .model import SCHEMA_VERSION, annotate_coverage, annotate_rows, build_team, stamp
+from .counter_detection import reconcile_turn_counters
+from .model import SCHEMA_VERSION, annotate_coverage, annotate_rows, build_team, normalized, stamp
 from .start_detection import bootstrap_evidence
 from .vision import Avatars, Reader, Video, save_image
 
@@ -93,6 +94,8 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
             evidence=bootstrap_evidence(frame,video.layout,reader)
             if evidence["accepted"]:
                 boot,boot_time=frame,stamp_time
+                video.layout=evidence.get("layout",video.layout)
+                reader.layout=video.layout
                 break
             report(.02+min(.07,(stamp_time-start)/max(finish-start,1)*.1),f"自动寻找可用选招画面：{stamp(stamp_time)}")
         if boot is None:
@@ -189,23 +192,26 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
             # 多个相邻 Frame 投票读取 Counter；Skill 使用最后一次完整可见的选择。
             statuses=[reader.status(f[1]) for f in frames[-4:]]
             turns=[s["turn"] for s in statuses if s["turn"] is not None]
-            turn=Counter(turns).most_common(1)[0][0] if turns else rows[-1]["turn"] if rows else None
+            turn=Counter(turns).most_common(1)[0][0] if turns else None
             valid=[(f,s) for f,s in zip(frames[-4:],statuses) if s["turn"]==turn] if turns else list(zip(frames[-4:],statuses))
             when,frame,scores,button=valid[-1][0]
             status=valid[-1][1]
             bonus_values=[tuple(s["bonus"]) for _,s in valid if s["bonus"]]
             bonus=list(Counter(bonus_values).most_common(1)[0][0]) if bonus_values else None
-            bonus_inferred=False
-            if bonus is None and rows and "bonus" in status["raw"]["bonus"].casefold() and rows[-1]["turn"]==turn:
-                bonus=rows[-1]["bonus"]
-                bonus_inferred=True
+            bonus_unreadable=bonus is None and "bonus" in status["raw"]["bonus"].casefold()
             slot_roles=reader.roles(frame)
             order,identity_confidence=avatars.assign(scores,slot_roles)
             skills=reader.skills(frame)
+            # Confidence is not correctness: preserve a second nearby reading
+            # and flag disagreements instead of silently trusting one Frame.
+            earlier=next((f for f,s in reversed(valid[:-1]) if when-f[0]>=.15),None)
+            previous_skills=reader.skills(earlier[1]) if earlier else None
             availability=avatars.availability(frame)
             notes=[]
-            if not turns:notes.append("TURN Counter 不可读，暂沿用最近的 TURN，请核对")
-            if bonus_inferred:notes.append("BONUS Counter 不可读，暂沿用最近的 BONUS，请核对")
+            if segment["end"]-segment["start"]<.65:
+                notes.append("选招画面出现不足 0.65 秒，可能是 UI 过渡或快速确认，请核对是否实际行动")
+            if not turns:notes.append("TURN Counter 不可读，编号保留未知；最近的 TURN 仅供上下文核对")
+            if bonus_unreadable:notes.append("BONUS Counter 不可读，未沿用其他画面的读数，请核对 OD")
             if button<.55:
                 notes.append("行动开始按钮的 Template Match 较低")
             actions=[]
@@ -223,6 +229,16 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
                     notes.append(f"位置 {slot+1} 的 Skill OCR 需要核对")
                 if item.get("skill_truncated"):
                     notes.append(f"位置 {slot+1} 的 Skill 名称被 UI 截断，可手动补全")
+                if item.get("skill_ocr_disagreement"):
+                    notes.append(f"位置 {slot+1} 的两种 Skill OCR 读数不一致，请核对")
+                if item.get("skill_suspicious"):
+                    notes.append(f"位置 {slot+1} 的 Skill OCR 有单字或异常字符，请核对")
+                if previous_skills:
+                    previous=previous_skills[slot]
+                    item["skill_frame_evidence"]=[{"time":round(earlier[0],3),"raw":previous["skill_raw"]},
+                                                   {"time":round(when,3),"raw":item["skill_raw"]}]
+                    if normalized(previous["skill_raw"])!=normalized(item["skill_raw"]):
+                        notes.append(f"位置 {slot+1} 的相邻 Frame Skill 读数变化，请核对最终选择")
                 if person["name_confidence"]<.8 and not person.get("name_is_placeholder"):
                     notes.append(f"角色 {ident+1} 的名称需要核对")
                 if name_mode=="auto" and person.get("name_is_placeholder"):
@@ -239,7 +255,11 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
                  "turn":turn,"bonus":bonus,"actions":actions,"positions":[i+1 for i in order],"od_before":od,
                  "od_after":None,"od_source":"video_ocr","screenshot":picture,"confidence":round(min(a["confidence"] for a in actions),3),
                  "needs_review":bool(notes),"reviewed":False,"notes":notes,"ocr_status":status}
+            if turn is None and rows:
+                row["turn_context"]=rows[-1].get("turn") or rows[-1].get("turn_context")
+            if bonus_unreadable:row["bonus_unreadable"]=True
             rows.append(row)
+        reconcile_turn_counters(rows)
         # OD Menu 本身不确认行动：在同一 TURN 的 BONUS 前，空白选招画面不生成一行。
         cleaned=[]
         for i,row in enumerate(rows):
@@ -250,8 +270,8 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
                 cleaned.append(row)
         rows=cleaned
         for event in activations:
-            row=next((r for r in rows if r["bonus"] and r["time"]>event["time"] and not r.get("od_activation")),None)
-            if row:
+            row=next((r for r in rows if r["time"]>event["time"]),None)
+            if row and (row["bonus"] or row.get("bonus_unreadable")) and not row.get("od_activation"):
                 row.update(od_activation=True,od_trigger=event)
                 before,after=event["gauge_before"],row["od_before"]
                 if before is not None and after is not None:
@@ -260,16 +280,16 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
                         row["od_level"]=level
         rows=annotate_rows(rows)
         for session in {r["od_session"] for r in rows if r.get("od_session")}:
-            group=[r for r in rows if r.get("od_session")==session]
-            total=Counter(r["bonus"][1] for r in group).most_common(1)[0][0]
-            for row in group:
-                if row["bonus"][1]!=total:
-                    row["notes"].append("BONUS 总数由同一 OD 内的多次读数投票校正")
+            group=[r for r in rows if r.get("od_session")==session and r.get("bonus")]
+            totals={r["bonus"][1] for r in group}
+            if len(totals)>1:
+                for row in group:
+                    row["notes"].append("同一 OD Session 的 BONUS 总数读数不一致，保留各画面读数，请核对")
                     row["needs_review"]=True
-                row["bonus"][1]=total
-                row["bonus_text"]=f"BONUS {row['bonus'][0]}/{total}"
         if not rows:
             raise ValueError("未识别到有效行动。请核对 Crop 与战斗开始时间。")
+        if not any(type(row.get("turn")) is int for row in rows):
+            raise ValueError("所有候选行动的 TURN 都不可读，无法生成可靠的行动轴。请校准游戏区域或 UI Layout 后重试；候选 Screenshot 已保留供核对。")
         report(.91,"读取每次行动后的 OD Gauge")
         for i,row in enumerate(rows):
             next_time=rows[i+1]["phase_start"] if i+1<len(rows) else min(finish,row["confirm_time"]+30)
@@ -314,6 +334,10 @@ def analyze(video_path, output, *, start=0, end=None, sample_rate=4, profile=Non
             document["name_recognition"]=naming_status
             if naming_status["unresolved"]:
                 document["warnings"].append(f"{naming_status['unresolved']} 个 Avatar 未从本地图库识别，已保留 Placeholder；请核对队伍名字。")
+        if rows[0].get("turn") and rows[0]["turn"]>1:
+            document["warnings"].append(f"首条可读记录从 TURN {rows[0]['turn']} 开始；此前的行动未恢复，请核对原视频。")
+            rows[0]["needs_review"]=True
+            rows[0]["notes"].append("首条记录不是 TURN 1，不能据此认定视频前段已完整提取")
         annotate_coverage(document)
         save_json(output/"axis.json",document)
         save_json(output/"axis.automatic.json",document)

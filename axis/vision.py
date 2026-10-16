@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
+from .counter_detection import grouped_counter_text
 from .model import normalized, resolve_character, resolve_skill
 
 DEFAULT_LAYOUT = {
@@ -153,11 +154,40 @@ class Reader:
         turn, bonus, od = result
         turn_value = parse_turn(turn[0]) if turn[1] >= .6 else None
         extra = parse_counter(bonus[0], "BONUS") if bonus[1] >= .62 else None
-        match = re.fullmatch(r"\D*(\d{1,3}(?:\.\d+)?)\s*[%％]\D*", od[0])
+        # Some UI versions place BONUS in the TURN area; recognition-only OCR
+        # also merges labels, large numerals and slash glyphs against scenery.
+        same_area_bonus=parse_counter(turn[0],"BONUS") if turn[1]>=.62 else None
+        if same_area_bonus:
+            extra=same_area_bonus
+            bonus=turn
+        sources={"turn":"recognition","bonus":"recognition"}
+        if hasattr(self,"ocr") and (turn_value is None or turn_value>99 or
+                                    (extra is None and "ON" in bonus[0].upper())):
+            areas=[self.layout["turn_box"],self.layout["bonus_box"]]
+            x1=max(0,min(b[0] for b in areas)-10)
+            y1=max(0,min(b[1] for b in areas)-25)
+            x2=min(frame.shape[1],max(b[2] for b in areas)+25)
+            y2=min(frame.shape[0],max(b[3] for b in areas)+10)
+            detected,_=self.ocr(frame[y1:y2,x1:x2],use_cls=False,text_score=.6)
+            for keyword in ("TURN","BONUS"):
+                candidate=grouped_counter_text(detected,keyword)
+                if not candidate:
+                    continue
+                text,confidence=candidate
+                parsed=parse_turn(text) if keyword=="TURN" else parse_counter(text,keyword)
+                if parsed is None or confidence<.65:
+                    continue
+                if keyword=="TURN":
+                    turn_value,turn=parsed,candidate
+                    sources["turn"]="detection"
+                else:
+                    extra,bonus=parsed,candidate
+                    sources["bonus"]="detection"
+        match = re.fullmatch(r"[^\d+\-]*([+\-]?\d{1,3}(?:\.\d+)?)\s*[%％][^\d+\-]*", od[0])
         value = float(match[1]) if match and od[1] >= .65 else None
         return {"turn":turn_value,"bonus":extra,"od":value,
                 "raw":{"turn":turn[0],"bonus":bonus[0],"od":od[0]},
-                "confidence":{"turn":float(turn[1]),"bonus":float(bonus[1]),"od":float(od[1])}}
+                "confidence":{"turn":float(turn[1]),"bonus":float(bonus[1]),"od":float(od[1])},"sources":sources}
 
     def roles(self, frame):
         return [role_key(text) if score >= .6 else "" for text,score in self.lines([crop(frame,b) for b in self.layout["role_boxes"]])]
@@ -190,14 +220,23 @@ class Reader:
             line,line_confidence=direct[index]
             line=re.sub(r"^[\d.,%\s]+(?=[\u4e00-\u9fff])", "",line)
             plausible_line=len(re.findall(r"[A-Za-z\u3040-\u30ff\u3400-\u9fff]",line))>=2 and line.upper() not in ("DAMAGE","SP","DP","HP")
+            detected_raw=raw
+            disagreement=bool(raw and plausible_line and line_confidence>=.73 and normalized(raw)!=normalized(line))
             if not raw and plausible_line and line_confidence>=.6:
                 raw,score=line,float(line_confidence)
             elif raw and len(normalized(raw))<len(normalized(line)) and line_confidence>=.73 and normalized(raw) in normalized(line):
-                raw,score=line,float(line_confidence)
+                # Longer recognition-only text can contain scenery or a stray
+                # ASCII prefix/suffix. Keep it as Evidence, not a silent repair.
+                added=normalized(line).replace(normalized(raw),"",1)
+                if re.fullmatch(r"[\u3040-\u30ff\u3400-\u9fff]+",added):
+                    raw,score=line,float(line_confidence)
             full, alias, match_score, reason = resolve_skill(raw,self.aliases)
             actions.append({"skill_raw":raw,"skill_full":full,"skill":alias,
                             "skill_confidence":round(min(score,match_score),3),"skill_note":reason,
-                            "skill_truncated":bool(re.search(r"(?:\.{2,}|…+|⋯+)$",raw.strip()))})
+                            "skill_truncated":bool(re.search(r"(?:\.{2,}|…+|⋯+)$",raw.strip())),
+                            "skill_ocr_disagreement":disagreement,
+                            "skill_ocr_alternatives":{"detection":detected_raw,"recognition":line},
+                            "skill_suspicious":bool(re.search(r"[#�]",raw) or re.fullmatch(r"[\u3400-\u9fff]",raw.strip()))})
         return actions
 
     def roster(self, frame):
@@ -235,11 +274,15 @@ class Avatars:
     def availability(self,frame):
         hsv=cv2.cvtColor(frame,cv2.COLOR_BGR2HSV)
         scores=[]
-        for x,y in self.layout["portrait_centers"][:3]:
-            patch=hsv[y-108:y+108,x-108:x+108]
+        for index,(x,y) in enumerate(self.layout["portrait_centers"][:3]):
+            radii=self.layout.get("portrait_radii")
+            rx,ry=radii[index] if radii else (100,100)
+            dx,dy=round(rx*1.15),round(ry*1.15)
+            left,top=max(0,x-dx),max(0,y-dy)
+            patch=hsv[top:min(hsv.shape[0],y+dy),left:min(hsv.shape[1],x+dx)]
             yy,xx=np.indices(patch.shape[:2])
-            distance=(xx-108)**2+(yy-108)**2
-            ring=(distance>85**2)&(distance<105**2)
+            distance=((xx-(x-left))/rx)**2+((yy-(y-top))/ry)**2
+            ring=(distance>.85**2)&(distance<1.05**2)
             pink=(patch[:,:,0]>135)&(patch[:,:,0]<177)&(patch[:,:,1]>75)&(patch[:,:,2]>110)
             scores.append(round(float(pink[ring].mean()),3))
         return scores

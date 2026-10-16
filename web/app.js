@@ -75,7 +75,7 @@ function editedTeam(){
 function compactRows(){
   const rows=[];
   doc.rows.forEach((row,index)=>{
-    if(row.kind==='extra' && rows.length && row.turn===rows.at(-1).turn && row.od_session===rows.at(-1).od_session){
+    if(row.kind==='extra' && row.turn!=null && rows.length && row.turn===rows.at(-1).turn && row.od_session===rows.at(-1).od_session){
       const prior=rows.at(-1), actions=new Map(prior.actions.map(a=>[a.character_id,a]));
       row.actions.forEach(a=>{if(a.skill==='—')return;if(actions.has(a.character_id)){const before=actions.get(a.character_id);before.skill_sequence.push(a.skill);before.skill=skillSequence(before.skill_sequence);before.skill_full+=' + '+a.skill_full;}else{prior.extra_actions.push(a);}});
       prior.needs_review ||= row.needs_review&&!row.reviewed;
@@ -135,9 +135,9 @@ function renderTable(){
     const gap=gaps.get(row.id),gapRow=gap?`<tr class="coverage-gap-row"><td colspan="10">${gapButton(gap)}<span>角色与 Skill 未识别</span></td></tr>`:'';
     return gapRow+`<tr data-index="${row.sourceIndex}" class="${row.sources.includes(selectedIndex)?'selected':''}" title="点击核对${row.sources.length>1?'；本行合并了 '+row.sources.length+' 次确认':''}"><td class="round ${special?'special':''}">${escapeHtml(row.label)}</td>${actions}<td class="od">${od===null||od===undefined?'—':escapeHtml(Number(od).toString())}</td><td class="time">${clock(row.confirm_time)}</td><td class="review">${review}</td></tr>`;
   }).join('');
-  $('count-normal').textContent=new Set(doc.rows.filter(r=>r.kind==='normal').map(r=>r.turn)).size;
+  $('count-normal').textContent=new Set(doc.rows.filter(r=>r.kind==='normal'&&Number.isInteger(r.turn)).map(r=>r.turn)).size;
   $('count-confirm').textContent=doc.rows.length;
-  $('count-od').textContent=doc.rows.filter(r=>r.kind==='pre_od'||r.kind==='post_od').length;
+  $('count-od').textContent=new Set(doc.rows.filter(r=>r.od_session!=null).map(r=>r.od_session)).size;
   $('count-review').textContent=doc.rows.filter(r=>r.needs_review&&!r.reviewed).length;
 }
 

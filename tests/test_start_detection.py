@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
+import cv2
 import numpy as np
 
 HERE=Path(__file__).resolve().parents[1]
@@ -21,15 +22,17 @@ from axis.vision import DEFAULT_LAYOUT
 
 def selection_frame(*,button=True,detail=True):
     frame=np.zeros((1080,1920,3),np.uint8)
-    for x1,y1,x2,y2 in DEFAULT_LAYOUT['portrait_boxes']:
-        frame[y1:y2,x1:x2]=(180,30,160)
+    for index,(x,y) in enumerate(DEFAULT_LAYOUT['portrait_centers']):
+        cv2.circle(frame,(x,y),98 if index<3 else 82,(180,30,160),14)
     if detail:
         rng=np.random.default_rng(321)
         for x,y in DEFAULT_LAYOUT['portrait_centers']:
             frame[y-15:y+57,x-39:x+39]=rng.integers(0,255,(72,78,3),dtype=np.uint8)
     if button:
         x1,y1,x2,y2=DEFAULT_LAYOUT['button_box']
-        frame[y1:y2,x1:x2]=(180,30,160)
+        center=((x1+x2)//2,(y1+y2)//2)
+        cv2.circle(frame,center,117,(180,30,160),-1)
+        cv2.circle(frame,center,117,(230,150,235),4)
     return frame
 
 
